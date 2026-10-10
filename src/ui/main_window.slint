@@ -15,10 +15,12 @@ export component MainWindow inherits Window {
     in property <string> mouse_text;
     in property <string> wheel_text;
     in property <string> app_text;
+    in property <string> export_text;
     callback pause_clicked();
+    callback export_clicked();
     title: "kb_count";
     width: 720px;
-    height: 460px;
+    height: 500px;
     background: #f5f6f8;
     VerticalLayout {
         padding: 24px;
@@ -35,7 +37,12 @@ export component MainWindow inherits Window {
         }
         Rectangle { height: 1px; background: #d5d8dc; }
         Text { text: status_text; color: #2471a3; }
-        Button { text: "暂停 / 恢复统计"; clicked => { root.pause_clicked(); } }
+        HorizontalLayout {
+            spacing: 12px;
+            Button { text: "暂停 / 恢复统计"; clicked => { root.pause_clicked(); } }
+            Button { text: "导出今日 CSV"; clicked => { root.export_clicked(); } }
+        }
+        Text { text: export_text; color: #566573; }
         Text { text: "数据保存在可执行文件所在目录。"; color: #7b7d7d; }
     }
 }

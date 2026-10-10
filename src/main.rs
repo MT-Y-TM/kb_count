@@ -4,7 +4,7 @@ mod stats;
 mod collector;
 slint::include_modules!();
 use chrono::Local;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
 use std::thread;
 use std::time::Duration;
 use crate::stats::aggregator::Aggregator;
@@ -18,13 +18,17 @@ fn main() -> anyhow::Result<()> {
     let cfg = config::load_or_create()?;
     let dir = config::app_dir()?;
     let db = Arc::new(Mutex::new(storage::database::Database::open(&dir.join("stats.db"))?));
+    let enabled = Arc::new(AtomicBool::new(cfg.capture_enabled));
     let events = collector::start();
     let db_writer = Arc::clone(&db);
+    let writer_enabled = Arc::clone(&enabled);
+    let flush_seconds = cfg.flush_interval_seconds.max(1);
     thread::Builder::new().name("kb-stats-writer".into()).spawn(move || {
         loop {
-            thread::sleep(Duration::from_secs(5));
+            thread::sleep(Duration::from_secs(flush_seconds));
             let mut aggregator = Aggregator::default();
             while let Ok(event) = events.try_recv() { aggregator.record(event, CaptureMode::Detailed); }
+            if !writer_enabled.load(Ordering::Relaxed) { continue; }
             for event in aggregator.drain() {
                 if let Err(error) = db_writer.lock().expect("database mutex poisoned").record(&event) { tracing::error!(%error, "failed to persist aggregate"); }
             }
@@ -33,17 +37,24 @@ fn main() -> anyhow::Result<()> {
     let ui = MainWindow::new()?;
     let date = Local::now().format("%Y-%m-%d").to_string();
     let (keyboard, mouse, wheel, apps) = db.lock().unwrap().totals(&date)?;
-    ui.set_date_text(date.into());
+    ui.set_date_text(date.clone().into());
     ui.set_keyboard_text(keyboard.to_string().into());
     ui.set_mouse_text(mouse.to_string().into());
     ui.set_wheel_text(wheel.to_string().into());
     ui.set_app_text(apps.to_string().into());
     ui.set_status_text(if cfg.capture_enabled { "统计运行中" } else { "统计已暂停" }.into());
-    let enabled = Arc::new(Mutex::new(cfg.capture_enabled));
-    let enabled2 = Arc::clone(&enabled);
-    ui.on_pause_clicked(move || { let mut value = enabled2.lock().expect("state mutex poisoned"); *value = !*value; });
+    ui.set_export_text("未导出".into());
+    let enabled_for_ui = Arc::clone(&enabled);
+    let db_for_export = Arc::clone(&db);
+    let dir_for_export = dir.clone();
+    let date_for_export = date.clone();
+    ui.on_pause_clicked(move || { let value = !enabled_for_ui.load(Ordering::Relaxed); enabled_for_ui.store(value, Ordering::Relaxed); });
+    ui.on_export_clicked(move || {
+        let path = dir_for_export.join(format!("kb_count-{}.csv", date_for_export));
+        let text = match storage::export::export_date(&db_for_export.lock().expect("database mutex poisoned"), &date_for_export, &path) { Ok(()) => format!("已导出：{}", path.display()), Err(error) => format!("导出失败：{error}") };
+        tracing::info!(%text);
+    });
     ui.run()?;
     Ok(())
 }
-
 
