@@ -1,4 +1,4 @@
-import { Button } from "std-widgets.slint";
+import { Button, LineEdit } from "std-widgets.slint";
 component MetricCard inherits Rectangle {
     in property <string> label;
     in property <string> value;
@@ -17,10 +17,12 @@ export component MainWindow inherits Window {
     in property <string> app_text;
     in property <string> export_text;
     in property <string> ranking_text;
+    in-out property <string> query_date;
     callback pause_clicked();
     callback export_clicked();
     callback today_clicked();
     callback yesterday_clicked();
+    callback query_clicked();
     title: "kb_count";
     width: 720px;
     height: 500px;
@@ -31,6 +33,7 @@ export component MainWindow inherits Window {
         Text { text: "kb_count"; font-size: 28px; color: #17202a; }
         HorizontalLayout { spacing: 8px; Text { text: date_text; color: #566573; } Button { text: "今日"; clicked => { root.today_clicked(); } } Button { text: "昨日"; clicked => { root.yesterday_clicked(); } } }
         Rectangle { height: 1px; background: #d5d8dc; }
+        HorizontalLayout { spacing: 8px; LineEdit { text <=> root.query_date; placeholder-text: "YYYY-MM-DD"; } Button { text: "查询日期"; clicked => { root.query_clicked(); } } }
         HorizontalLayout {
             spacing: 12px;
             MetricCard { label: "键盘敲击"; value: keyboard_text; }
@@ -51,5 +54,4 @@ export component MainWindow inherits Window {
         Text { text: "数据保存在可执行文件所在目录。"; color: #7b7d7d; }
     }
 }
-
 

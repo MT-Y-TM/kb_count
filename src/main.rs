@@ -75,6 +75,7 @@ fn main() -> anyhow::Result<()> {
     let date = Local::now().format("%Y-%m-%d").to_string();
     let (keyboard, mouse, wheel, apps) = db.lock().unwrap().totals(&date)?;
     ui.set_date_text(date.clone().into());
+    ui.set_query_date(date.clone().into());
     ui.set_keyboard_text(keyboard.to_string().into());
     ui.set_mouse_text(mouse.to_string().into());
     ui.set_wheel_text(wheel.to_string().into());
@@ -112,7 +113,6 @@ fn main() -> anyhow::Result<()> {
     let ui_for_state = ui.as_weak();
     let db_for_export = Arc::clone(&db);
     let dir_for_export = dir.clone();
-    let date_for_export = date.clone();
     let ui_for_export = ui.as_weak();
     let db_for_date = Arc::clone(&db);
     let ui_for_date = ui.as_weak();
@@ -125,6 +125,7 @@ fn main() -> anyhow::Result<()> {
                 && let Some(ui) = ui.upgrade()
             {
                 ui.set_date_text(date.into());
+                ui.set_query_date(ui.get_date_text());
                 ui.set_keyboard_text(k.to_string().into());
                 ui.set_mouse_text(m.to_string().into());
                 ui.set_wheel_text(w.to_string().into());
@@ -143,11 +144,39 @@ fn main() -> anyhow::Result<()> {
                 && let Some(ui) = ui.upgrade()
             {
                 ui.set_date_text(date.into());
+                ui.set_query_date(ui.get_date_text());
                 ui.set_keyboard_text(k.to_string().into());
                 ui.set_mouse_text(m.to_string().into());
                 ui.set_wheel_text(w.to_string().into());
                 ui.set_app_text(a.to_string().into());
             }
+        }
+    });
+    let db_for_query = Arc::clone(&db);
+    let ui_for_query = ui.as_weak();
+    ui.on_query_clicked(move || {
+        let Some(ui) = ui_for_query.upgrade() else {
+            return;
+        };
+        let date = ui.get_query_date().to_string();
+        if chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d").is_err() {
+            ui.set_status_text("日期格式应为 YYYY-MM-DD".into());
+            return;
+        }
+        match db_for_query
+            .lock()
+            .expect("database mutex poisoned")
+            .totals(&date)
+        {
+            Ok((k, m, w, a)) => {
+                ui.set_date_text(date.into());
+                ui.set_keyboard_text(k.to_string().into());
+                ui.set_mouse_text(m.to_string().into());
+                ui.set_wheel_text(w.to_string().into());
+                ui.set_app_text(a.to_string().into());
+                ui.set_status_text("已查询指定日期".into());
+            }
+            Err(error) => ui.set_status_text(format!("查询失败：{error}").into()),
         }
     });
     ui.on_pause_clicked(move || {
@@ -165,10 +194,14 @@ fn main() -> anyhow::Result<()> {
         }
     });
     ui.on_export_clicked(move || {
-        let path = dir_for_export.join(format!("kb_count-{}.csv", date_for_export));
+        let selected_date = ui_for_export
+            .upgrade()
+            .map(|ui| ui.get_date_text().to_string())
+            .unwrap_or_else(|| Local::now().format("%Y-%m-%d").to_string());
+        let path = dir_for_export.join(format!("kb_count-{}.csv", selected_date));
         let text = match storage::export::export_date(
             &db_for_export.lock().expect("database mutex poisoned"),
-            &date_for_export,
+            &selected_date,
             &path,
         ) {
             Ok(()) => format!("已导出：{}", path.display()),

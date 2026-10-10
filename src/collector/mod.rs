@@ -15,7 +15,7 @@ pub fn start() -> Receiver<InputEvent> {
 mod raw_input {
     use super::*;
     use chrono::Local;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::ffi::c_void;
     use std::sync::{Mutex, OnceLock};
     use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, LRESULT, WPARAM};
@@ -24,6 +24,7 @@ mod raw_input {
         OpenProcess, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
         QueryFullProcessImageNameW,
     };
+    use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
     use windows::Win32::UI::Input::{
         GetRawInputData, RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER, RID_INPUT, RIDEV_DEVNOTIFY,
         RIDEV_INPUTSINK, RIM_TYPEKEYBOARD, RIM_TYPEMOUSE, RegisterRawInputDevices,
@@ -31,13 +32,14 @@ mod raw_input {
     use windows::Win32::UI::WindowsAndMessaging::{
         CS_HREDRAW, CS_VREDRAW, CallNextHookEx, CreateWindowExW, DefWindowProcW, DispatchMessageW,
         GetForegroundWindow, GetMessageW, GetWindowThreadProcessId, KBDLLHOOKSTRUCT,
-        LLKHF_INJECTED, MSG, RegisterClassW, SetWindowsHookExW, TranslateMessage,
+        LLKHF_INJECTED, LLKHF_UP, MSG, RegisterClassW, SetWindowsHookExW, TranslateMessage,
         UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_INPUT, WM_KEYDOWN, WM_SYSKEYDOWN, WNDCLASSW,
         WS_EX_TOOLWINDOW, WS_POPUP,
     };
     use windows::core::{PWSTR, w};
     static SENDER: OnceLock<SyncSender<InputEvent>> = OnceLock::new();
     static PROCESS_CACHE: OnceLock<Mutex<HashMap<u32, (String, String)>>> = OnceLock::new();
+    static PRESSED_KEYS: OnceLock<Mutex<HashSet<u32>>> = OnceLock::new();
 
     pub fn run(tx: SyncSender<InputEvent>) {
         let _ = SENDER.set(tx);
@@ -112,6 +114,18 @@ mod raw_input {
         if code >= 0 && (wparam.0 as u32 == WM_KEYDOWN || wparam.0 as u32 == WM_SYSKEYDOWN) {
             let data = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
             if data.flags.0 & LLKHF_INJECTED.0 == 0 {
+                let key_id = (data.scanCode << 1) | u32::from(data.flags.0 & 1 != 0);
+                let pressed = PRESSED_KEYS.get_or_init(|| Mutex::new(HashSet::new()));
+                let mut pressed = pressed.lock().expect("keyboard state poisoned");
+                let physically_down = GetAsyncKeyState(data.vkCode as i32) < 0;
+                if pressed.contains(&key_id) && physically_down {
+                    return CallNextHookEx(None, code, wparam, lparam);
+                }
+                pressed.remove(&key_id);
+                if !pressed.insert(key_id) {
+                    return CallNextHookEx(None, code, wparam, lparam);
+                }
+                drop(pressed);
                 let (app_name, app_path) = foreground_process();
                 if let Some(sender) = SENDER.get() {
                     let _ = sender.try_send(InputEvent {
@@ -127,9 +141,42 @@ mod raw_input {
                         detailed: true,
                     });
                 }
+            } else if data.flags.0 & LLKHF_UP.0 != 0 {
+                let key_id = (data.scanCode << 1) | u32::from(data.flags.0 & 1 != 0);
+                if let Some(pressed) = PRESSED_KEYS.get() {
+                    pressed
+                        .lock()
+                        .expect("keyboard state poisoned")
+                        .remove(&key_id);
+                }
             }
+        } else if code >= 0 && (data_is_key_up(wparam) || data_is_injected(lparam)) {
+            clear_pressed_key(lparam);
         }
         CallNextHookEx(None, code, wparam, lparam)
+    }
+
+    #[allow(unsafe_op_in_unsafe_fn)]
+    unsafe fn data_is_key_up(wparam: WPARAM) -> bool {
+        wparam.0 as u32 == 0x0101 || wparam.0 as u32 == 0x0105
+    }
+
+    #[allow(unsafe_op_in_unsafe_fn)]
+    unsafe fn data_is_injected(lparam: LPARAM) -> bool {
+        let data = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
+        data.flags.0 & LLKHF_INJECTED.0 != 0
+    }
+
+    #[allow(unsafe_op_in_unsafe_fn)]
+    unsafe fn clear_pressed_key(lparam: LPARAM) {
+        let data = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
+        let key_id = (data.scanCode << 1) | u32::from(data.flags.0 & 1 != 0);
+        if let Some(pressed) = PRESSED_KEYS.get() {
+            pressed
+                .lock()
+                .expect("keyboard state poisoned")
+                .remove(&key_id);
+        }
     }
 
     extern "system" fn window_proc(
