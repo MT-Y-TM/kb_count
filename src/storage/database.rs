@@ -2,8 +2,10 @@ use anyhow::Result;
 use rusqlite::{params, Connection};
 use std::path::Path;
 use crate::stats::event::InputEvent;
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct AppTotal { pub app_name:String, pub app_path:String, pub keyboard:i64, pub mouse:i64, pub wheel:i64 }
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct KeyTotal { pub code:String, pub count:i64 }
 pub struct Database { conn: Connection }
@@ -24,3 +26,4 @@ impl Database {
  }
  #[allow(dead_code)] pub fn set_policy(&self,path:&str,mode:&str)->Result<()> { self.conn.execute("INSERT INTO app_policies(app_id,capture_mode) SELECT id,?2 FROM applications WHERE executable_path=?1 ON CONFLICT(app_id) DO UPDATE SET capture_mode=excluded.capture_mode",params![path,mode])?; Ok(()) }
 }
+
