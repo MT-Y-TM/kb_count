@@ -57,7 +57,7 @@ unsafe fn run_windows() {
     let hwnd = match CreateWindowExW(
         WS_EX_TOOLWINDOW,
         w!("kb_count_tray"),
-        w!("kb_count"),
+        w!("kb_count_tray_window"),
         WS_POPUP,
         0,
         0,

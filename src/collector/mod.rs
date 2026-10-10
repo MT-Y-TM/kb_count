@@ -67,7 +67,7 @@ mod raw_input {
             let hwnd = match CreateWindowExW(
                 WS_EX_TOOLWINDOW,
                 w!("kb_count_raw_input"),
-                w!("kb_count"),
+                w!("kb_count_raw_input_window"),
                 WS_POPUP,
                 0,
                 0,

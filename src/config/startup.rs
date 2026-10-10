@@ -16,12 +16,8 @@ pub mod windows {
             let status = RegOpenKeyExW(HKEY_CURRENT_USER, *RUN_KEY, 0, KEY_SET_VALUE, &mut key);
             status.ok()?;
             let result = if enabled {
-                let mut text = exe
-                    .as_os_str()
-                    .to_string_lossy()
-                    .replace('"', "")
-                    .encode_utf16()
-                    .collect::<Vec<_>>();
+                let path = exe.as_os_str().to_string_lossy().replace('"', "");
+                let mut text = format!("\"{path}\"").encode_utf16().collect::<Vec<_>>();
                 text.push(0);
                 RegSetValueExW(key, *VALUE_NAME, 0, REG_SZ, Some(bytemuck_slice(&text)))
             } else {
@@ -61,7 +57,9 @@ pub mod windows {
             let value = String::from_utf16_lossy(std::slice::from_raw_parts(
                 bytes.as_ptr() as *const u16,
                 (size as usize / 2).saturating_sub(1),
-            ));
+            ))
+            .trim_matches('"')
+            .to_string();
             Ok(value.eq_ignore_ascii_case(&exe.to_string_lossy()))
         }
     }
