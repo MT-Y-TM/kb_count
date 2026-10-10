@@ -115,8 +115,9 @@ fn main() -> anyhow::Result<()> {
         let ui = ui_for_date.clone();
         move || {
             let date = Local::now().format("%Y-%m-%d").to_string();
-            if let Ok((k, m, w, a)) = db.lock().expect("database mutex poisoned").totals(&date) {
-                if let Some(ui) = ui.upgrade() {
+            if let Ok((k, m, w, a)) = db.lock().expect("database mutex poisoned").totals(&date)
+                && let Some(ui) = ui.upgrade()
+            {
                     ui.set_date_text(date.into());
                     ui.set_keyboard_text(k.to_string().into());
                     ui.set_mouse_text(m.to_string().into());
@@ -133,8 +134,9 @@ fn main() -> anyhow::Result<()> {
             let date = (Local::now() - chrono::Duration::days(1))
                 .format("%Y-%m-%d")
                 .to_string();
-            if let Ok((k, m, w, a)) = db.lock().expect("database mutex poisoned").totals(&date) {
-                if let Some(ui) = ui.upgrade() {
+            if let Ok((k, m, w, a)) = db.lock().expect("database mutex poisoned").totals(&date)
+                && let Some(ui) = ui.upgrade()
+            {
                     ui.set_date_text(date.into());
                     ui.set_keyboard_text(k.to_string().into());
                     ui.set_mouse_text(m.to_string().into());
