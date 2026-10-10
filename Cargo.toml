@@ -14,7 +14,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["fmt"] }
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 slint = "1.9"
 
 [target.'cfg(windows)'.dependencies]
@@ -22,6 +22,7 @@ windows = { version = "0.58", features = ["Win32_Foundation", "Win32_UI_Input_Ke
 
 [build-dependencies]
 slint-build = "1.9"
+
 
 
 
