@@ -1,12 +1,14 @@
 use crate::stats::event::InputEvent;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
 
-pub fn start() -> Receiver<InputEvent> {
+pub fn start(enabled: Arc<AtomicBool>) -> Receiver<InputEvent> {
     let (tx, rx) = mpsc::sync_channel(8192);
     thread::Builder::new()
         .name("kb-input-collector".into())
-        .spawn(move || raw_input::run(tx))
+        .spawn(move || raw_input::run(tx, enabled))
         .expect("unable to start collector");
     rx
 }
@@ -44,13 +46,15 @@ mod raw_input {
     use windows::core::{PWSTR, w};
     type ProcessCacheEntry = (String, String, Instant);
     static SENDER: OnceLock<SyncSender<InputEvent>> = OnceLock::new();
+    static CAPTURE_ENABLED: OnceLock<Arc<AtomicBool>> = OnceLock::new();
     static PROCESS_CACHE: OnceLock<Mutex<HashMap<u32, ProcessCacheEntry>>> = OnceLock::new();
     static PRESSED_KEYS: OnceLock<Mutex<HashSet<u32>>> = OnceLock::new();
     static WHEEL_REMAINDER: OnceLock<Mutex<HashMap<String, (i32, i32)>>> = OnceLock::new();
     static DROPPED_EVENTS: AtomicU64 = AtomicU64::new(0);
 
-    pub fn run(tx: SyncSender<InputEvent>) {
+    pub fn run(tx: SyncSender<InputEvent>, enabled: Arc<AtomicBool>) {
         let _ = SENDER.set(tx);
+        let _ = CAPTURE_ENABLED.set(enabled);
         unsafe {
             let instance = GetModuleHandleW(None).expect("module handle");
             let class = WNDCLASSW {
@@ -130,6 +134,9 @@ mod raw_input {
                     return CallNextHookEx(None, code, wparam, lparam);
                 }
                 drop(pressed);
+                if !capture_enabled() {
+                    return CallNextHookEx(None, code, wparam, lparam);
+                }
                 let (app_name, app_path) = foreground_process();
                 emit_event(
                     Local::now().format("%Y-%m-%d").to_string(),
@@ -263,9 +270,20 @@ mod raw_input {
         if let Some(pressed) = PRESSED_KEYS.get() {
             pressed.lock().expect("keyboard state poisoned").clear();
         }
+        reset_wheel_state();
+    }
+
+    fn reset_wheel_state() {
         if let Some(remainder) = WHEEL_REMAINDER.get() {
             remainder.lock().expect("wheel state poisoned").clear();
         }
+    }
+
+    fn capture_enabled() -> bool {
+        CAPTURE_ENABLED
+            .get()
+            .map(|enabled| enabled.load(Ordering::Relaxed))
+            .unwrap_or(true)
     }
     #[allow(clippy::too_many_arguments)]
     fn emit_event(
@@ -279,6 +297,9 @@ mod raw_input {
         mouse_count: i64,
         wheel_units: i64,
     ) {
+        if !capture_enabled() {
+            return;
+        }
         if let Some(sender) = SENDER.get() {
             let result = sender.try_send(InputEvent {
                 local_date: date,
@@ -392,6 +413,10 @@ mod raw_input {
         if raw.header.dwType != RIM_TYPEMOUSE.0 {
             return;
         }
+        if !capture_enabled() {
+            reset_wheel_state();
+            return;
+        }
         let (app_name, app_path) = point_process();
         let flags = raw.data.mouse.Anonymous.Anonymous.usButtonFlags;
         for (flag, code) in [
@@ -485,7 +510,7 @@ mod raw_input {
 #[cfg(not(windows))]
 mod raw_input {
     use super::*;
-    pub fn run(_tx: SyncSender<InputEvent>) {
+    pub fn run(_tx: SyncSender<InputEvent>, _enabled: Arc<AtomicBool>) {
         thread::park();
     }
 }

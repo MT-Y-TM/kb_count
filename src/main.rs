@@ -453,7 +453,7 @@ fn main() -> anyhow::Result<()> {
         })?,
     ));
     let enabled = Arc::new(AtomicBool::new(cfg.capture_enabled));
-    let events = collector::start();
+    let events = collector::start(Arc::clone(&enabled));
     let db_writer = Arc::clone(&db);
     let writer_enabled = Arc::clone(&enabled);
     let data_generation = Arc::new(AtomicU64::new(0));
