@@ -21,6 +21,7 @@ mod raw_input {
         Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
     };
+    use std::time::{Duration, Instant};
     use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::System::Threading::{
@@ -37,11 +38,13 @@ mod raw_input {
         GA_ROOT, GetAncestor, GetCursorPos, GetForegroundWindow, GetMessageW,
         GetWindowThreadProcessId, KBDLLHOOKSTRUCT, LLKHF_INJECTED, LLKHF_UP, MSG, RegisterClassW,
         SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_INPUT,
-        WM_KEYDOWN, WM_SYSKEYDOWN, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP, WindowFromPoint,
+        WM_KEYDOWN, WM_POWERBROADCAST, WM_SYSKEYDOWN, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP,
+        WindowFromPoint,
     };
     use windows::core::{PWSTR, w};
+    type ProcessCacheEntry = (String, String, Instant);
     static SENDER: OnceLock<SyncSender<InputEvent>> = OnceLock::new();
-    static PROCESS_CACHE: OnceLock<Mutex<HashMap<u32, (String, String)>>> = OnceLock::new();
+    static PROCESS_CACHE: OnceLock<Mutex<HashMap<u32, ProcessCacheEntry>>> = OnceLock::new();
     static PRESSED_KEYS: OnceLock<Mutex<HashSet<u32>>> = OnceLock::new();
     static WHEEL_REMAINDER: OnceLock<Mutex<(i32, i32)>> = OnceLock::new();
     static DROPPED_EVENTS: AtomicU64 = AtomicU64::new(0);
@@ -132,20 +135,17 @@ mod raw_input {
                 }
                 drop(pressed);
                 let (app_name, app_path) = foreground_process();
-                if let Some(sender) = SENDER.get() {
-                    let _ = sender.try_send(InputEvent {
-                        local_date: Local::now().format("%Y-%m-%d").to_string(),
-                        app_name,
-                        app_path,
-                        input_type: "keyboard".into(),
-                        code: format!("scan:{:02x}:ext:{}", data.scanCode, data.flags.0 & 1 != 0),
-                        count: 1,
-                        keyboard_count: 1,
-                        mouse_count: 0,
-                        wheel_units: 0,
-                        detailed: true,
-                    });
-                }
+                emit_event(
+                    Local::now().format("%Y-%m-%d").to_string(),
+                    app_name,
+                    app_path,
+                    "keyboard",
+                    format!("scan:{:02x}:ext:{}", data.scanCode, data.flags.0 & 1 != 0),
+                    1,
+                    1,
+                    0,
+                    0,
+                );
             } else if data.flags.0 & LLKHF_UP.0 != 0 {
                 let key_id = (data.scanCode << 1) | u32::from(data.flags.0 & 1 != 0);
                 if let Some(pressed) = PRESSED_KEYS.get() {
@@ -194,6 +194,8 @@ mod raw_input {
             unsafe {
                 handle_input(hwnd, lparam);
             }
+        } else if msg == WM_POWERBROADCAST {
+            reset_input_state();
         }
         unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
     }
@@ -222,13 +224,14 @@ mod raw_input {
             return ("Unknown".into(), "Unknown".into());
         }
         let cache = PROCESS_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-        if let Some(value) = cache
+        if let Some((name, path, checked_at)) = cache
             .lock()
             .expect("process cache poisoned")
             .get(&pid)
             .cloned()
+            && checked_at.elapsed() < Duration::from_secs(60)
         {
-            return value;
+            return (name, path);
         }
         let Ok(process) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
             return ("Unknown".into(), "Unknown".into());
@@ -253,12 +256,21 @@ mod raw_input {
             .and_then(|v| v.to_str())
             .unwrap_or("Unknown")
             .to_string();
-        let result = (name, path);
+        let result = (name, path, Instant::now());
         cache
             .lock()
             .expect("process cache poisoned")
             .insert(pid, result.clone());
-        result
+        (result.0, result.1)
+    }
+
+    fn reset_input_state() {
+        if let Some(pressed) = PRESSED_KEYS.get() {
+            pressed.lock().expect("keyboard state poisoned").clear();
+        }
+        if let Some(remainder) = WHEEL_REMAINDER.get() {
+            *remainder.lock().expect("wheel state poisoned") = (0, 0);
+        }
     }
     #[allow(clippy::too_many_arguments)]
     fn emit_event(
