@@ -7,7 +7,7 @@ slint::include_modules!();
 use crate::stats::aggregator::Aggregator;
 use crate::stats::policy::CaptureMode;
 use chrono::Local;
-use slint::{Timer, TimerMode};
+use slint::{CloseRequestResponse, Timer, TimerMode};
 use std::path::PathBuf;
 use std::sync::{
     Arc, Mutex,
@@ -346,6 +346,8 @@ fn main() -> anyhow::Result<()> {
             }
         })?;
     let ui = MainWindow::new()?;
+    ui.window()
+        .on_close_requested(|| CloseRequestResponse::HideWindow);
     let date = Local::now().format("%Y-%m-%d").to_string();
     let sort_state = Arc::new(Mutex::new(RankingSort::Total));
     refresh_overview(
