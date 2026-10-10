@@ -41,7 +41,9 @@ impl Database {
             [&event.app_path],
             |r| r.get(0),
         )?;
-        tx.execute("INSERT INTO daily_input_counts VALUES (?1,?2,?3,?4,?5) ON CONFLICT(local_date,app_id,input_type,input_code) DO UPDATE SET count=count+excluded.count",params![event.local_date,id,event.input_type,event.code,event.count])?;
+        if event.detailed {
+            tx.execute("INSERT INTO daily_input_counts VALUES (?1,?2,?3,?4,?5) ON CONFLICT(local_date,app_id,input_type,input_code) DO UPDATE SET count=count+excluded.count",params![event.local_date,id,event.input_type,event.code,event.count])?;
+        }
         tx.execute("INSERT INTO daily_app_totals(local_date,app_id,keyboard_count,mouse_click_count,wheel_units) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(local_date,app_id) DO UPDATE SET keyboard_count=keyboard_count+excluded.keyboard_count,mouse_click_count=mouse_click_count+excluded.mouse_click_count,wheel_units=wheel_units+excluded.wheel_units",params![event.local_date,id,event.keyboard_count,event.mouse_count,event.wheel_units])?;
         tx.commit()?;
         Ok(())
