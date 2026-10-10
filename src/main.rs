@@ -36,8 +36,12 @@ enum RankingSort {
 }
 
 fn heat_count(rows: &[storage::database::KeyTotal], scan_code: &str) -> i32 {
+    heat_count_ext(rows, scan_code, false)
+}
+
+fn heat_count_ext(rows: &[storage::database::KeyTotal], scan_code: &str, extended: bool) -> i32 {
     rows.iter()
-        .find(|row| row.code == format!("scan:{scan_code}:ext:false"))
+        .find(|row| row.code == format!("scan:{scan_code}:ext:{extended}"))
         .map(|row| row.count.clamp(0, i64::from(i32::MAX)) as i32)
         .unwrap_or(0)
 }
@@ -238,6 +242,8 @@ fn set_heatmap(ui: &MainWindow, rows: &[storage::database::KeyTotal]) {
     ui.set_heat_right_shift(heat_count(rows, "36"));
     ui.set_heat_ctrl(heat_count(rows, "1d"));
     ui.set_heat_alt(heat_count(rows, "38"));
+    ui.set_heat_right_ctrl(heat_count_ext(rows, "1d", true));
+    ui.set_heat_right_alt(heat_count_ext(rows, "38", true));
     ui.set_heat_space(heat_count(rows, "39"));
 }
 

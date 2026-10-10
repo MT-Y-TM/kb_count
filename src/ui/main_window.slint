@@ -94,6 +94,8 @@ export component MainWindow inherits Window {
     in property <int> heat_right_shift;
     in property <int> heat_ctrl;
     in property <int> heat_alt;
+    in property <int> heat_right_ctrl;
+    in property <int> heat_right_alt;
     in property <int> heat_space;
     in-out property <string> query_date;
     in-out property <string> detail_path;
@@ -153,7 +155,7 @@ export component MainWindow inherits Window {
         HorizontalLayout { spacing: 3px; HeatKey { label: "Tab"; count: heat_tab; width: 48px; } HeatKey { label: "Q"; count: heat_q; } HeatKey { label: "W"; count: heat_w; } HeatKey { label: "E"; count: heat_e; } HeatKey { label: "R"; count: heat_r; } HeatKey { label: "T"; count: heat_t; } HeatKey { label: "Y"; count: heat_y; } HeatKey { label: "U"; count: heat_u; } HeatKey { label: "I"; count: heat_i; } HeatKey { label: "O"; count: heat_o; } HeatKey { label: "P"; count: heat_p; } HeatKey { label: "["; count: heat_left_bracket; } HeatKey { label: "]"; count: heat_right_bracket; } HeatKey { label: "Enter"; count: heat_enter; width: 58px; } }
         HorizontalLayout { spacing: 3px; HeatKey { label: "Caps"; count: heat_caps; width: 58px; } HeatKey { label: "A"; count: heat_a; } HeatKey { label: "S"; count: heat_s; } HeatKey { label: "D"; count: heat_d; } HeatKey { label: "F"; count: heat_f; } HeatKey { label: "G"; count: heat_g; } HeatKey { label: "H"; count: heat_h; } HeatKey { label: "J"; count: heat_j; } HeatKey { label: "K"; count: heat_k; } HeatKey { label: "L"; count: heat_l; } HeatKey { label: ";"; count: heat_semicolon; } HeatKey { label: "'"; count: heat_quote; } HeatKey { label: "`"; count: heat_backtick; } }
         HorizontalLayout { spacing: 3px; HeatKey { label: "LShift"; count: heat_left_shift; width: 64px; } HeatKey { label: "\\"; count: heat_backslash; } HeatKey { label: "Z"; count: heat_z; } HeatKey { label: "X"; count: heat_x; } HeatKey { label: "C"; count: heat_c; } HeatKey { label: "V"; count: heat_v; } HeatKey { label: "B"; count: heat_b; } HeatKey { label: "N"; count: heat_n; } HeatKey { label: "M"; count: heat_m; } HeatKey { label: ","; count: heat_comma; } HeatKey { label: "."; count: heat_period; } HeatKey { label: "/"; count: heat_slash; } HeatKey { label: "RShift"; count: heat_right_shift; width: 64px; } }
-        HorizontalLayout { spacing: 3px; HeatKey { label: "Ctrl"; count: heat_ctrl; width: 50px; } HeatKey { label: "Alt"; count: heat_alt; width: 50px; } HeatKey { label: "Space"; count: heat_space; width: 220px; } }
+        HorizontalLayout { spacing: 3px; HeatKey { label: "L Ctrl"; count: heat_ctrl; width: 58px; } HeatKey { label: "L Alt"; count: heat_alt; width: 52px; } HeatKey { label: "Space"; count: heat_space; width: 190px; } HeatKey { label: "R Alt"; count: heat_right_alt; width: 52px; } HeatKey { label: "R Ctrl"; count: heat_right_ctrl; width: 58px; } }
         Rectangle { height: 1px; background: #d5d8dc; }
         Text { text: "应用详情与采集策略"; font-size: 18px; color: #17202a; }
         HorizontalLayout { spacing: 8px; LineEdit { text <=> root.detail_path; placeholder-text: "输入应用完整路径"; } Button { text: "查询应用"; clicked => { root.query_app_clicked(); } } }
