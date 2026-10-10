@@ -160,6 +160,8 @@ fn refresh_overview(
     let (keyboard, mouse, wheel, apps) = database.totals(date)?;
     ui.set_date_text(date.into());
     ui.set_query_date(date.into());
+    ui.set_export_from_date(date.into());
+    ui.set_export_to_date(date.into());
     ui.set_keyboard_text(keyboard.to_string().into());
     ui.set_mouse_text(mouse.to_string().into());
     ui.set_wheel_text(wheel.to_string().into());
@@ -198,9 +200,15 @@ fn refresh_overview(
         .map(|row| format!("{}:{}", row.code, row.count))
         .collect::<Vec<_>>()
         .join("  ");
+    let wheel = database
+        .input_ranking(date, None, "wheel")?
+        .into_iter()
+        .map(|row| format!("{}:{}", row.code, row.count))
+        .collect::<Vec<_>>()
+        .join("  ");
     ui.set_frequency_text(
         format!(
-            "全局按键排行: {}\n鼠标分类统计: {}",
+            "全局按键排行: {}\n鼠标分类统计: {}\n滚轮分类统计: {}",
             if keys.is_empty() {
                 "无详细数据"
             } else {
@@ -210,6 +218,11 @@ fn refresh_overview(
                 "无详细数据"
             } else {
                 &mouse
+            },
+            if wheel.is_empty() {
+                "无详细数据"
+            } else {
+                &wheel
             }
         )
         .into(),
@@ -230,6 +243,7 @@ fn refresh_detail(
     };
     let keys = database.input_ranking(date, Some(path), "keyboard")?;
     let mouse = database.input_ranking(date, Some(path), "mouse")?;
+    let wheel = database.input_ranking(date, Some(path), "wheel")?;
     let key_text = if detail.policy == CaptureMode::TotalsOnly {
         "未记录详细数据".to_string()
     } else {
@@ -246,9 +260,14 @@ fn refresh_detail(
         .map(|row| format!("{}:{}", row.code, row.count))
         .collect::<Vec<_>>()
         .join("  ");
+    let wheel_text = wheel
+        .into_iter()
+        .map(|row| format!("{}:{}", row.code, row.count))
+        .collect::<Vec<_>>()
+        .join("  ");
     ui.set_detail_text(
         format!(
-            "{}\n路径: {}\n策略: {}\n键盘: {}  鼠标: {}  滚轮: {}\n按键: {}\n鼠标分类: {}",
+            "{}\n路径: {}\n策略: {}\n键盘: {}  鼠标: {}  滚轮: {}\n按键: {}\n鼠标分类: {}\n滚轮分类: {}",
             detail.app_name,
             detail.app_path,
             detail.policy.as_str(),
@@ -260,6 +279,11 @@ fn refresh_detail(
                 "无详细数据"
             } else {
                 &mouse_text
+            },
+            if wheel_text.is_empty() {
+                "无详细数据"
+            } else {
+                &wheel_text
             }
         )
         .into(),
@@ -365,6 +389,8 @@ fn main() -> anyhow::Result<()> {
         .into(),
     );
     ui.set_export_text("未导出".into());
+    ui.set_export_from_date(date.clone().into());
+    ui.set_export_to_date(date.clone().into());
     ui.set_detail_text("请输入应用完整路径查询详情。".into());
     let startup_matches = std::env::current_exe()
         .ok()
@@ -672,32 +698,40 @@ fn main() -> anyhow::Result<()> {
         }
     });
     ui.on_export_clicked(move || {
-        let selected_date = ui_for_export
-            .upgrade()
-            .map(|ui| ui.get_date_text().to_string())
-            .unwrap_or_else(|| Local::now().format("%Y-%m-%d").to_string());
-        let default_name = format!("kb_count-{}.csv", selected_date);
+        let Some(ui) = ui_for_export.upgrade() else {
+            return;
+        };
+        let from = ui.get_export_from_date().to_string();
+        let to = ui.get_export_to_date().to_string();
+        if chrono::NaiveDate::parse_from_str(&from, "%Y-%m-%d").is_err()
+            || chrono::NaiveDate::parse_from_str(&to, "%Y-%m-%d").is_err()
+        {
+            ui.set_export_text("导出日期格式应为 YYYY-MM-DD".into());
+            return;
+        }
+        let default_name = if from == to {
+            format!("kb_count-{}.csv", from)
+        } else {
+            format!("kb_count-{}-{}.csv", from, to)
+        };
         #[cfg(windows)]
         let Some(path) = choose_csv_path(&default_name) else {
-            if let Some(ui) = ui_for_export.upgrade() {
-                ui.set_export_text("已取消导出".into());
-            }
+            ui.set_export_text("已取消导出".into());
             return;
         };
         #[cfg(not(windows))]
         let path = dir_for_export.join(default_name);
-        let text = match storage::export::export_date(
+        let text = match storage::export::export_range(
             &db_for_export.lock().expect("database mutex poisoned"),
-            &selected_date,
+            &from,
+            &to,
             &path,
         ) {
             Ok(()) => format!("已导出：{}", path.display()),
             Err(error) => format!("导出失败：{error}"),
         };
         tracing::info!(%text);
-        if let Some(ui) = ui_for_export.upgrade() {
-            ui.set_export_text(text.into());
-        }
+        ui.set_export_text(text.into());
     });
     let tray_enabled = Arc::clone(&enabled);
     let tray_ui = ui.as_weak();

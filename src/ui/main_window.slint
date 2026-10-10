@@ -35,6 +35,8 @@ export component MainWindow inherits Window {
     in property <string> startup_text;
     in property <string> clear_button_text;
     in property <string> theme_text;
+    in-out property <string> export_from_date;
+    in-out property <string> export_to_date;
     in property <int> heat_q;
     in property <int> heat_w;
     in property <int> heat_e;
@@ -92,6 +94,7 @@ export component MainWindow inherits Window {
         HorizontalLayout { spacing: 8px; Text { text: date_text; color: #566573; } Button { text: "今日"; clicked => { root.today_clicked(); } } Button { text: "昨日"; clicked => { root.yesterday_clicked(); } } }
         Rectangle { height: 1px; background: #d5d8dc; }
         HorizontalLayout { spacing: 8px; LineEdit { text <=> root.query_date; placeholder-text: "YYYY-MM-DD"; } Button { text: "查询日期"; clicked => { root.query_clicked(); } } }
+        HorizontalLayout { spacing: 8px; Text { text: "导出范围"; color: #566573; } LineEdit { text <=> root.export_from_date; placeholder-text: "开始 YYYY-MM-DD"; } LineEdit { text <=> root.export_to_date; placeholder-text: "结束 YYYY-MM-DD"; } }
         HorizontalLayout {
             spacing: 12px;
             MetricCard { label: "键盘敲击"; value: keyboard_text; dark: root.dark_mode; }
