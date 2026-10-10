@@ -29,9 +29,11 @@ mod raw_input {
         RIDEV_INPUTSINK, RIM_TYPEKEYBOARD, RIM_TYPEMOUSE, RegisterRawInputDevices,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DispatchMessageW,
-        GetForegroundWindow, GetMessageW, GetWindowThreadProcessId, MSG, RegisterClassW,
-        TranslateMessage, WM_INPUT, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP,
+        CS_HREDRAW, CS_VREDRAW, CallNextHookEx, CreateWindowExW, DefWindowProcW, DispatchMessageW,
+        GetForegroundWindow, GetMessageW, GetWindowThreadProcessId, KBDLLHOOKSTRUCT,
+        LLKHF_INJECTED, MSG, RegisterClassW, SetWindowsHookExW, TranslateMessage,
+        UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_INPUT, WM_KEYDOWN, WM_SYSKEYDOWN, WNDCLASSW,
+        WS_EX_TOOLWINDOW, WS_POPUP,
     };
     use windows::core::{PWSTR, w};
     static SENDER: OnceLock<SyncSender<InputEvent>> = OnceLock::new();
@@ -75,33 +77,59 @@ mod raw_input {
             if hwnd.0.is_null() {
                 return;
             }
-            let devices = [
-                RAWINPUTDEVICE {
-                    usUsagePage: 0x01,
-                    usUsage: 0x06,
-                    dwFlags: RIDEV_INPUTSINK | RIDEV_DEVNOTIFY,
-                    hwndTarget: hwnd,
-                },
-                RAWINPUTDEVICE {
-                    usUsagePage: 0x01,
-                    usUsage: 0x02,
-                    dwFlags: RIDEV_INPUTSINK | RIDEV_DEVNOTIFY,
-                    hwndTarget: hwnd,
-                },
-            ];
+            let devices = [RAWINPUTDEVICE {
+                usUsagePage: 0x01,
+                usUsage: 0x02,
+                dwFlags: RIDEV_INPUTSINK | RIDEV_DEVNOTIFY,
+                hwndTarget: hwnd,
+            }];
             if let Err(error) =
                 RegisterRawInputDevices(&devices, std::mem::size_of::<RAWINPUTDEVICE>() as u32)
             {
                 tracing::error!(%error, "RegisterRawInputDevices failed");
                 return;
             }
-            tracing::info!("Raw Input keyboard/mouse collector started");
+            let keyboard_hook =
+                match SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), None, 0) {
+                    Ok(hook) => hook,
+                    Err(error) => {
+                        tracing::error!(%error, "SetWindowsHookExW keyboard hook failed");
+                        return;
+                    }
+                };
+            tracing::info!("Raw Input mouse and low-level keyboard collector started");
             let mut msg = MSG::default();
             while GetMessageW(&mut msg, None, 0, 0).into() {
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
+            let _ = UnhookWindowsHookEx(keyboard_hook);
         }
+    }
+
+    #[allow(unsafe_op_in_unsafe_fn)]
+    unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        if code >= 0 && (wparam.0 as u32 == WM_KEYDOWN || wparam.0 as u32 == WM_SYSKEYDOWN) {
+            let data = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
+            if data.flags.0 & LLKHF_INJECTED.0 == 0 {
+                let (app_name, app_path) = foreground_process();
+                if let Some(sender) = SENDER.get() {
+                    let _ = sender.try_send(InputEvent {
+                        local_date: Local::now().format("%Y-%m-%d").to_string(),
+                        app_name,
+                        app_path,
+                        input_type: "keyboard".into(),
+                        code: format!("scan:{:02x}:ext:{}", data.scanCode, data.flags.0 & 1 != 0),
+                        count: 1,
+                        keyboard_count: 1,
+                        mouse_count: 0,
+                        wheel_units: 0,
+                        detailed: true,
+                    });
+                }
+            }
+        }
+        CallNextHookEx(None, code, wparam, lparam)
     }
 
     extern "system" fn window_proc(
