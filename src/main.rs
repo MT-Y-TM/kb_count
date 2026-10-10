@@ -437,12 +437,13 @@ fn main() -> anyhow::Result<()> {
         .on_close_requested(|| CloseRequestResponse::HideWindow);
     let date = Local::now().format("%Y-%m-%d").to_string();
     let sort_state = Arc::new(Mutex::new(RankingSort::Total));
-    refresh_overview(
-        &ui,
-        &db.lock().expect("database mutex poisoned"),
-        &date,
-        RankingSort::Total,
-    )?;
+    ui.set_date_text(date.clone().into());
+    ui.set_query_date(date.clone().into());
+    ui.set_keyboard_text("0".into());
+    ui.set_mouse_text("0".into());
+    ui.set_wheel_text("0".into());
+    ui.set_app_text("0".into());
+    ui.set_ranking_text("打开统计面板后加载数据".into());
     ui.set_status_text(
         if cfg.capture_enabled {
             "统计运行中"
@@ -815,6 +816,7 @@ fn main() -> anyhow::Result<()> {
     let tray_enabled = Arc::clone(&enabled);
     let tray_ui = ui.as_weak();
     let tray_db = Arc::clone(&db);
+    let tray_sort = Arc::clone(&sort_state);
     let tray_shutdown = shutdown_tx;
     let tray_config = Arc::clone(&config_state);
     let tray_timer = Timer::default();
@@ -825,6 +827,17 @@ fn main() -> anyhow::Result<()> {
         match command {
             tray::Command::Open | tray::Command::Settings => {
                 if let Some(ui) = tray_ui.upgrade() {
+                    let date = ui.get_date_text().to_string();
+                    if let Ok(database) = tray_db.lock() {
+                        if let Err(error) = refresh_overview(
+                            &ui,
+                            &database,
+                            &date,
+                            *tray_sort.lock().expect("ranking state poisoned"),
+                        ) {
+                            ui.set_status_text(format!("查询失败：{error}").into());
+                        }
+                    }
                     let _ = ui.show();
                 }
             }
@@ -857,6 +870,27 @@ fn main() -> anyhow::Result<()> {
                     .checkpoint();
                 std::process::exit(0);
             }
+        }
+    });
+    let refresh_timer_ui = ui.as_weak();
+    let refresh_timer_db = Arc::clone(&db);
+    let refresh_timer_sort = Arc::clone(&sort_state);
+    let refresh_timer = Timer::default();
+    refresh_timer.start(TimerMode::Repeated, Duration::from_secs(2), move || {
+        let Some(ui) = refresh_timer_ui.upgrade() else {
+            return;
+        };
+        if !ui.window().is_visible() {
+            return;
+        }
+        let date = ui.get_date_text().to_string();
+        if let Ok(database) = refresh_timer_db.try_lock() {
+            let _ = refresh_overview(
+                &ui,
+                &database,
+                &date,
+                *refresh_timer_sort.lock().expect("ranking state poisoned"),
+            );
         }
     });
     ui.hide()?;
