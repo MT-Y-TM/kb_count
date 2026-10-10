@@ -37,6 +37,7 @@ fn main() -> anyhow::Result<()> {
     tray::start();
     let cfg = config::load_or_create()?;
     let dir = config::app_dir()?;
+    tracing::info!(data_dir = %dir.display(), "portable data directory initialized");
     let db = Arc::new(Mutex::new(storage::database::Database::open(
         &dir.join("stats.db"),
     )?));
