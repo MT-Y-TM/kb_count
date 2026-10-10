@@ -8,6 +8,7 @@ use crate::stats::aggregator::Aggregator;
 use crate::stats::policy::CaptureMode;
 use chrono::Local;
 use slint::{Timer, TimerMode};
+use std::path::PathBuf;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -31,6 +32,105 @@ enum RankingSort {
     Keyboard,
     Mouse,
     Total,
+}
+
+fn heat_count(rows: &[storage::database::KeyTotal], scan_code: &str) -> i32 {
+    rows.iter()
+        .find(|row| row.code == format!("scan:{scan_code}:ext:false"))
+        .map(|row| row.count.clamp(0, i64::from(i32::MAX)) as i32)
+        .unwrap_or(0)
+}
+
+#[cfg(windows)]
+fn choose_csv_path(default_name: &str) -> Option<PathBuf> {
+    use windows::Win32::UI::Controls::Dialogs::{
+        GetSaveFileNameW, OFN_EXPLORER, OFN_OVERWRITEPROMPT, OFN_PATHMUSTEXIST, OPENFILENAMEW,
+    };
+    use windows::core::{PCWSTR, PWSTR, w};
+    let mut buffer = [0u16; 32768];
+    let encoded = default_name.encode_utf16().collect::<Vec<_>>();
+    let length = encoded.len().min(buffer.len().saturating_sub(1));
+    buffer[..length].copy_from_slice(&encoded[..length]);
+    let filter: PCWSTR = w!("CSV 文件 (*.csv)\0*.csv\0所有文件 (*.*)\0*.*\0\0");
+    let mut dialog = OPENFILENAMEW {
+        lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
+        lpstrFilter: filter,
+        lpstrFile: PWSTR(buffer.as_mut_ptr()),
+        nMaxFile: buffer.len() as u32,
+        lpstrDefExt: w!("csv"),
+        Flags: OFN_EXPLORER | OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST,
+        ..Default::default()
+    };
+    unsafe {
+        if !GetSaveFileNameW(&mut dialog).as_bool() {
+            return None;
+        }
+    }
+    let length = buffer.iter().position(|value| *value == 0).unwrap_or(0);
+    Some(PathBuf::from(String::from_utf16_lossy(&buffer[..length])))
+}
+
+fn set_heatmap(ui: &MainWindow, rows: &[storage::database::KeyTotal]) {
+    for (name, scan) in [
+        ("q", "10"),
+        ("w", "11"),
+        ("e", "12"),
+        ("r", "13"),
+        ("t", "14"),
+        ("y", "15"),
+        ("u", "16"),
+        ("i", "17"),
+        ("o", "18"),
+        ("p", "19"),
+        ("a", "1e"),
+        ("s", "1f"),
+        ("d", "20"),
+        ("f", "21"),
+        ("g", "22"),
+        ("h", "23"),
+        ("j", "24"),
+        ("k", "25"),
+        ("l", "26"),
+        ("z", "2c"),
+        ("x", "2d"),
+        ("c", "2e"),
+        ("v", "2f"),
+        ("b", "30"),
+        ("n", "31"),
+        ("m", "32"),
+    ] {
+        let value = heat_count(rows, scan);
+        match name {
+            "q" => ui.set_heat_q(value),
+            "w" => ui.set_heat_w(value),
+            "e" => ui.set_heat_e(value),
+            "r" => ui.set_heat_r(value),
+            "t" => ui.set_heat_t(value),
+            "y" => ui.set_heat_y(value),
+            "u" => ui.set_heat_u(value),
+            "i" => ui.set_heat_i(value),
+            "o" => ui.set_heat_o(value),
+            "p" => ui.set_heat_p(value),
+            "a" => ui.set_heat_a(value),
+            "s" => ui.set_heat_s(value),
+            "d" => ui.set_heat_d(value),
+            "f" => ui.set_heat_f(value),
+            "g" => ui.set_heat_g(value),
+            "h" => ui.set_heat_h(value),
+            "j" => ui.set_heat_j(value),
+            "k" => ui.set_heat_k(value),
+            "l" => ui.set_heat_l(value),
+            "z" => ui.set_heat_z(value),
+            "x" => ui.set_heat_x(value),
+            "c" => ui.set_heat_c(value),
+            "v" => ui.set_heat_v(value),
+            "b" => ui.set_heat_b(value),
+            "n" => ui.set_heat_n(value),
+            "m" => ui.set_heat_m(value),
+            _ => {}
+        }
+    }
+    ui.set_heat_space(heat_count(rows, "39"));
 }
 
 impl RankingSort {
@@ -84,9 +184,10 @@ fn refresh_overview(
         .join("\n");
     ui.set_ranking_text(ranking.into());
     ui.set_ranking_sort_text(sort.label().into());
-    let keys = database
-        .input_ranking(date, None, "keyboard")?
-        .into_iter()
+    ui.set_heatmap_title("键盘热力图（当前日期，全局）".into());
+    let all_keys = database.input_ranking(date, None, "keyboard")?;
+    let keys = all_keys
+        .iter()
         .take(10)
         .map(|row| format!("{}:{}", row.code, row.count))
         .collect::<Vec<_>>()
@@ -113,6 +214,7 @@ fn refresh_overview(
         )
         .into(),
     );
+    set_heatmap(ui, &all_keys);
     Ok(())
 }
 
@@ -131,12 +233,14 @@ fn refresh_detail(
     let key_text = if detail.policy == CaptureMode::TotalsOnly {
         "未记录详细数据".to_string()
     } else {
-        keys.into_iter()
+        keys.iter()
             .take(12)
             .map(|row| format!("{}:{}", row.code, row.count))
             .collect::<Vec<_>>()
             .join("  ")
     };
+    ui.set_heatmap_title("键盘热力图（当前日期，当前应用）".into());
+    set_heatmap(ui, &keys);
     let mouse_text = mouse
         .into_iter()
         .map(|row| format!("{}:{}", row.code, row.count))
@@ -291,6 +395,7 @@ fn main() -> anyhow::Result<()> {
     let enabled_for_ui = Arc::clone(&enabled);
     let ui_for_state = ui.as_weak();
     let db_for_export = Arc::clone(&db);
+    #[cfg(not(windows))]
     let dir_for_export = dir.clone();
     let ui_for_export = ui.as_weak();
     let db_for_date = Arc::clone(&db);
@@ -540,7 +645,16 @@ fn main() -> anyhow::Result<()> {
             .upgrade()
             .map(|ui| ui.get_date_text().to_string())
             .unwrap_or_else(|| Local::now().format("%Y-%m-%d").to_string());
-        let path = dir_for_export.join(format!("kb_count-{}.csv", selected_date));
+        let default_name = format!("kb_count-{}.csv", selected_date);
+        #[cfg(windows)]
+        let Some(path) = choose_csv_path(&default_name) else {
+            if let Some(ui) = ui_for_export.upgrade() {
+                ui.set_export_text("已取消导出".into());
+            }
+            return;
+        };
+        #[cfg(not(windows))]
+        let path = dir_for_export.join(default_name);
         let text = match storage::export::export_date(
             &db_for_export.lock().expect("database mutex poisoned"),
             &selected_date,

@@ -8,6 +8,15 @@ component MetricCard inherits Rectangle {
     border-radius: 8px;
     VerticalLayout { padding: 12px; Text { text: label; color: #566573; } Text { text: value; font-size: 24px; color: #17202a; } }
 }
+component HeatKey inherits Rectangle {
+    in property <string> label;
+    in property <int> count;
+    width: 36px;
+    height: 32px;
+    border-radius: 4px;
+    background: count == 0 ? #e5e7eb : count < 10 ? #bfdbfe : count < 50 ? #60a5fa : #1d4ed8;
+    VerticalLayout { Text { text: label; color: count >= 50 ? white : #17202a; horizontal-alignment: center; } Text { text: count; color: count >= 50 ? white : #566573; horizontal-alignment: center; font-size: 10px; } }
+}
 export component MainWindow inherits Window {
     in property <string> status_text;
     in property <string> date_text;
@@ -19,10 +28,38 @@ export component MainWindow inherits Window {
     in property <string> ranking_text;
     in property <string> ranking_sort_text;
     in property <string> frequency_text;
+    in property <string> heatmap_title;
     in property <string> detail_text;
     in property <string> settings_text;
     in property <string> startup_text;
     in property <string> clear_button_text;
+    in property <int> heat_q;
+    in property <int> heat_w;
+    in property <int> heat_e;
+    in property <int> heat_r;
+    in property <int> heat_t;
+    in property <int> heat_y;
+    in property <int> heat_u;
+    in property <int> heat_i;
+    in property <int> heat_o;
+    in property <int> heat_p;
+    in property <int> heat_a;
+    in property <int> heat_s;
+    in property <int> heat_d;
+    in property <int> heat_f;
+    in property <int> heat_g;
+    in property <int> heat_h;
+    in property <int> heat_j;
+    in property <int> heat_k;
+    in property <int> heat_l;
+    in property <int> heat_z;
+    in property <int> heat_x;
+    in property <int> heat_c;
+    in property <int> heat_v;
+    in property <int> heat_b;
+    in property <int> heat_n;
+    in property <int> heat_m;
+    in property <int> heat_space;
     in-out property <string> query_date;
     in-out property <string> detail_path;
     in-out property <string> policy_path;
@@ -69,6 +106,10 @@ export component MainWindow inherits Window {
         HorizontalLayout { spacing: 8px; Text { text: "应用排行"; font-size: 18px; color: #17202a; } Text { text: ranking_sort_text; color: #566573; } Button { text: "键盘"; clicked => { root.sort_keyboard_clicked(); } } Button { text: "鼠标"; clicked => { root.sort_mouse_clicked(); } } Button { text: "总量"; clicked => { root.sort_total_clicked(); } } }
         Text { text: ranking_text; color: #566573; wrap: word-wrap; }
         Text { text: frequency_text; color: #566573; wrap: word-wrap; }
+        Text { text: heatmap_title; font-size: 18px; color: #17202a; }
+        HorizontalLayout { spacing: 3px; HeatKey { label: "Q"; count: heat_q; } HeatKey { label: "W"; count: heat_w; } HeatKey { label: "E"; count: heat_e; } HeatKey { label: "R"; count: heat_r; } HeatKey { label: "T"; count: heat_t; } HeatKey { label: "Y"; count: heat_y; } HeatKey { label: "U"; count: heat_u; } HeatKey { label: "I"; count: heat_i; } HeatKey { label: "O"; count: heat_o; } HeatKey { label: "P"; count: heat_p; } }
+        HorizontalLayout { spacing: 3px; HeatKey { label: "A"; count: heat_a; } HeatKey { label: "S"; count: heat_s; } HeatKey { label: "D"; count: heat_d; } HeatKey { label: "F"; count: heat_f; } HeatKey { label: "G"; count: heat_g; } HeatKey { label: "H"; count: heat_h; } HeatKey { label: "J"; count: heat_j; } HeatKey { label: "K"; count: heat_k; } HeatKey { label: "L"; count: heat_l; } }
+        HorizontalLayout { spacing: 3px; HeatKey { label: "Z"; count: heat_z; } HeatKey { label: "X"; count: heat_x; } HeatKey { label: "C"; count: heat_c; } HeatKey { label: "V"; count: heat_v; } HeatKey { label: "B"; count: heat_b; } HeatKey { label: "N"; count: heat_n; } HeatKey { label: "M"; count: heat_m; } HeatKey { label: "Space"; count: heat_space; width: 110px; } }
         Rectangle { height: 1px; background: #d5d8dc; }
         Text { text: "应用详情与采集策略"; font-size: 18px; color: #17202a; }
         HorizontalLayout { spacing: 8px; LineEdit { text <=> root.detail_path; placeholder-text: "输入应用完整路径"; } Button { text: "查询应用"; clicked => { root.query_app_clicked(); } } }
