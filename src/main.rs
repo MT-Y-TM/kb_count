@@ -976,6 +976,6 @@ fn main() -> anyhow::Result<()> {
         }
     });
     ui.hide()?;
-    ui.run()?;
+    slint::run_event_loop()?;
     Ok(())
 }
