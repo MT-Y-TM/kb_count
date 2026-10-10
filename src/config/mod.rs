@@ -5,6 +5,7 @@ use std::path::PathBuf;
 pub struct Config {
     pub capture_enabled: bool,
     pub flush_interval_seconds: u64,
+    #[serde(default)]
     pub start_with_windows: bool,
     #[serde(default)]
     pub dark_mode: bool,
@@ -54,3 +55,19 @@ pub fn save(config: &Config) -> Result<()> {
     Ok(())
 }
 pub mod startup;
+
+#[cfg(test)]
+mod tests {
+    use super::Config;
+
+    #[test]
+    fn legacy_config_defaults_new_options() {
+        let config: Config = toml::from_str("capture_enabled = true\nflush_interval_seconds = 5\n")
+            .expect("legacy config should remain readable");
+
+        assert!(config.capture_enabled);
+        assert_eq!(config.flush_interval_seconds, 5);
+        assert!(!config.start_with_windows);
+        assert!(!config.dark_mode);
+    }
+}
