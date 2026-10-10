@@ -7,6 +7,7 @@ slint::include_modules!();
 use crate::stats::aggregator::Aggregator;
 use crate::stats::policy::CaptureMode;
 use chrono::Local;
+use slint::{Timer, TimerMode};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -176,6 +177,43 @@ fn main() -> anyhow::Result<()> {
         tracing::info!(%text);
         if let Some(ui) = ui_for_export.upgrade() {
             ui.set_export_text(text.into());
+        }
+    });
+    let tray_enabled = Arc::clone(&enabled);
+    let tray_ui = ui.as_weak();
+    let tray_db = Arc::clone(&db);
+    let tray_timer = Timer::default();
+    tray_timer.start(TimerMode::Repeated, Duration::from_millis(250), move || {
+        let Some(command) = tray::take_request() else {
+            return;
+        };
+        match command {
+            tray::Command::Open | tray::Command::Settings => {
+                if let Some(ui) = tray_ui.upgrade() {
+                    let _ = ui.show();
+                }
+            }
+            tray::Command::TogglePause => {
+                let value = !tray_enabled.load(Ordering::Relaxed);
+                tray_enabled.store(value, Ordering::Relaxed);
+                if let Some(ui) = tray_ui.upgrade() {
+                    ui.set_status_text(
+                        if value {
+                            "统计运行中"
+                        } else {
+                            "统计已暂停"
+                        }
+                        .into(),
+                    );
+                }
+            }
+            tray::Command::Exit => {
+                let _ = tray_db
+                    .lock()
+                    .expect("database mutex poisoned")
+                    .checkpoint();
+                std::process::exit(0);
+            }
         }
     });
     ui.run()?;
