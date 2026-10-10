@@ -51,5 +51,9 @@ INFO kb_count: portable data directory initialized data_dir=...
 
 输入采集会忽略带有 `LLKHF_INJECTED` 标记的模拟键盘事件，因此 PowerShell `SendInput`、自动化工具等不会被当作真实用户输入；请用实体键盘和鼠标验证。托盘退出会先请求统计线程完成最后一次 Flush，再关闭数据库。
 
+## 本机 Release 资源实测
+
+测试环境为 Windows 11 专业工作站版 10.0.26200，后台隐藏运行 10 秒、无输入，使用 PowerShell `Get-Process` 每秒采样：私有内存约 42.57–42.66 MiB，工作集约 97.82–97.88 MiB，平均 CPU 约 0%，Release EXE 约 10.94 MiB。该结果只代表本机短时空闲测试，不是所有 Windows 10/11 设备的性能承诺。
+
 
 
