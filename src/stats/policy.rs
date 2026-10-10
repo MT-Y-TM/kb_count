@@ -22,7 +22,7 @@ impl CaptureMode {
         }
     }
     pub fn for_application(path: &str) -> Self {
-        let lower = path.to_ascii_lowercase();
+        let lower = normalize_app_path(path);
         if [
             "chrome.exe",
             "msedge.exe",
@@ -51,8 +51,38 @@ impl CaptureMode {
 
     pub fn from_overrides(path: &str, overrides: &std::collections::HashMap<String, Self>) -> Self {
         overrides
-            .get(path)
+            .get(&normalize_app_path(path))
             .copied()
             .unwrap_or_else(|| Self::for_application(path))
+    }
+}
+
+/// Normalize the executable identity used for policy and statistics joins.
+/// Windows paths are case-insensitive, so keeping the identity lower-case
+/// prevents separate rows when the same process is reported with different
+/// casing. The original input text is never persisted as an event sequence.
+pub fn normalize_app_path(path: &str) -> String {
+    let value = path.trim().trim_matches('"');
+    if value.is_empty() || value.eq_ignore_ascii_case("unknown") {
+        return "Unknown".into();
+    }
+    value.to_ascii_lowercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CaptureMode, normalize_app_path};
+
+    #[test]
+    fn normalizes_identity_without_merging_unknown_with_real_paths() {
+        assert_eq!(
+            normalize_app_path(" C:/Apps/Editor.EXE "),
+            "c:/apps/editor.exe"
+        );
+        assert_eq!(normalize_app_path("unknown"), "Unknown");
+        assert_eq!(
+            CaptureMode::for_application("C:/Apps/Chrome.EXE"),
+            CaptureMode::TotalsOnly
+        );
     }
 }

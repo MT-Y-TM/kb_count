@@ -1,6 +1,6 @@
 use crate::stats::event::InputEvent;
-use crate::stats::policy::CaptureMode;
-use anyhow::Result;
+use crate::stats::policy::{CaptureMode, normalize_app_path};
+use anyhow::{Result, bail};
 use rusqlite::{Connection, params};
 use std::collections::HashMap;
 use std::path::Path;
@@ -31,17 +31,36 @@ pub struct AppDetail {
 pub struct Database {
     conn: Connection,
 }
+const SCHEMA_VERSION: i64 = 1;
+
+fn create_schema(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS applications(id INTEGER PRIMARY KEY, executable_name TEXT NOT NULL, executable_path TEXT NOT NULL UNIQUE, display_name TEXT NOT NULL, first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS daily_input_counts(local_date TEXT NOT NULL, app_id INTEGER NOT NULL, input_type TEXT NOT NULL, input_code TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY(local_date,app_id,input_type,input_code)); CREATE TABLE IF NOT EXISTS daily_app_totals(local_date TEXT NOT NULL, app_id INTEGER NOT NULL, keyboard_count INTEGER NOT NULL DEFAULT 0, mouse_click_count INTEGER NOT NULL DEFAULT 0, wheel_units INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(local_date,app_id)); CREATE TABLE IF NOT EXISTS app_policies(app_id INTEGER PRIMARY KEY, capture_mode TEXT NOT NULL DEFAULT 'detailed'); CREATE INDEX IF NOT EXISTS idx_daily_input_date ON daily_input_counts(local_date); CREATE INDEX IF NOT EXISTS idx_daily_totals_date ON daily_app_totals(local_date);",
+    )?;
+    Ok(())
+}
+
+fn migrate(conn: &Connection) -> Result<()> {
+    let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version > SCHEMA_VERSION {
+        bail!(
+            "stats.db schema version {version} is newer than this kb_count version {SCHEMA_VERSION}"
+        );
+    }
+    if version == 0 {
+        create_schema(conn)?;
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    } else {
+        // Keep indexes present when opening a database created by an older 1.x build.
+        create_schema(conn)?;
+    }
+    Ok(())
+}
 impl Database {
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS applications(id INTEGER PRIMARY KEY, executable_name TEXT NOT NULL, executable_path TEXT NOT NULL UNIQUE, display_name TEXT NOT NULL, first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS daily_input_counts(local_date TEXT NOT NULL, app_id INTEGER NOT NULL, input_type TEXT NOT NULL, input_code TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY(local_date,app_id,input_type,input_code)); CREATE TABLE IF NOT EXISTS daily_app_totals(local_date TEXT NOT NULL, app_id INTEGER NOT NULL, keyboard_count INTEGER NOT NULL DEFAULT 0, mouse_click_count INTEGER NOT NULL DEFAULT 0, wheel_units INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(local_date,app_id)); CREATE TABLE IF NOT EXISTS app_policies(app_id INTEGER PRIMARY KEY, capture_mode TEXT NOT NULL DEFAULT 'detailed'); CREATE INDEX IF NOT EXISTS idx_daily_input_date ON daily_input_counts(local_date); CREATE INDEX IF NOT EXISTS idx_daily_totals_date ON daily_app_totals(local_date);"
-        )?;
-        let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if version < 1 {
-            conn.pragma_update(None, "user_version", 1)?;
-        }
+        migrate(&conn)?;
         Ok(Self { conn })
     }
     #[allow(dead_code)]
@@ -61,10 +80,21 @@ impl Database {
         }
         let tx = self.conn.transaction()?;
         for event in events {
-            tx.execute("INSERT INTO applications(executable_name,executable_path,display_name,first_seen_at,last_seen_at) VALUES (?1,?2,?3,datetime('now'),datetime('now')) ON CONFLICT(executable_path) DO UPDATE SET last_seen_at=datetime('now')", params![event.app_name,event.app_path,event.app_name])?;
+            let app_path = normalize_app_path(&event.app_path);
+            let app_name = if app_path == "Unknown" {
+                "Unknown".to_string()
+            } else {
+                std::path::Path::new(&app_path)
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or(&event.app_name)
+                    .to_string()
+            };
+            tx.execute("INSERT INTO applications(executable_name,executable_path,display_name,first_seen_at,last_seen_at) VALUES (?1,?2,?3,datetime('now'),datetime('now')) ON CONFLICT(executable_path) DO UPDATE SET last_seen_at=datetime('now')", params![app_name,app_path,app_name])?;
             let id: i64 = tx.query_row(
                 "SELECT id FROM applications WHERE executable_path=?1",
-                [&event.app_path],
+                [&app_path],
                 |r| r.get(0),
             )?;
             if event.detailed {
@@ -115,6 +145,7 @@ impl Database {
         input_type: &str,
     ) -> Result<Vec<KeyTotal>> {
         if let Some(path) = app_path {
+            let path = normalize_app_path(path);
             let mut stmt=self.conn.prepare("SELECT c.input_code,SUM(c.count) FROM daily_input_counts c JOIN applications a ON a.id=c.app_id WHERE c.local_date=?1 AND c.input_type=?3 AND a.executable_path=?2 GROUP BY c.input_code ORDER BY SUM(c.count) DESC")?;
             let rows = stmt.query_map(params![date, path, input_type], |r| {
                 Ok(KeyTotal {
@@ -136,7 +167,8 @@ impl Database {
     #[allow(dead_code)]
     pub fn set_policy(&self, path: &str, mode: &str) -> Result<()> {
         let mode = CaptureMode::parse(mode).as_str();
-        let name = std::path::Path::new(path)
+        let path = normalize_app_path(path);
+        let name = std::path::Path::new(&path)
             .file_name()
             .and_then(|value| value.to_str())
             .unwrap_or("Unknown");
@@ -157,6 +189,7 @@ impl Database {
     }
 
     pub fn app_detail(&self, date: &str, path: &str) -> Result<Option<AppDetail>> {
+        let path = normalize_app_path(path);
         let row = self.conn.query_row(
             "SELECT a.executable_name,a.executable_path,COALESCE(t.keyboard_count,0),COALESCE(t.mouse_click_count,0),COALESCE(t.wheel_units,0),COALESCE(p.capture_mode,'') FROM applications a LEFT JOIN daily_app_totals t ON t.app_id=a.id AND t.local_date=?1 LEFT JOIN app_policies p ON p.app_id=a.id WHERE a.executable_path=?2",
             params![date, path],
@@ -168,7 +201,7 @@ impl Database {
                     keyboard: row.get(2)?,
                     mouse: row.get(3)?,
                     wheel: row.get(4)?,
-                    policy: if mode.is_empty() { CaptureMode::for_application(path) } else { CaptureMode::parse(&mode) },
+                    policy: if mode.is_empty() { CaptureMode::for_application(&path) } else { CaptureMode::parse(&mode) },
                 })
             },
         );
@@ -216,7 +249,7 @@ mod tests {
             .expect("policy");
         let policies = db.policies().expect("policies");
         assert_eq!(
-            policies.get("C:/Apps/editor.exe"),
+            policies.get("c:/apps/editor.exe"),
             Some(&CaptureMode::Excluded)
         );
     }

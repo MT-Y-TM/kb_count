@@ -6,8 +6,9 @@ mod tray;
 slint::include_modules!();
 use crate::stats::aggregator::Aggregator;
 use crate::stats::policy::CaptureMode;
+use anyhow::Context;
 use chrono::Local;
-use slint::{CloseRequestResponse, Timer, TimerMode};
+use slint::{CloseRequestResponse, SharedString, Timer, TimerMode};
 use std::path::PathBuf;
 use std::sync::{
     Arc, Mutex,
@@ -41,6 +42,13 @@ fn heat_count(rows: &[storage::database::KeyTotal], scan_code: &str) -> i32 {
         .unwrap_or(0)
 }
 
+fn ranking_path(item: &str) -> Option<&str> {
+    let prefix = "\n   路径: ";
+    let start = item.find(prefix)? + prefix.len();
+    let path = &item[start..];
+    Some(path.split('\n').next().unwrap_or(path).trim())
+}
+
 #[cfg(windows)]
 fn choose_csv_path(default_name: &str) -> Option<PathBuf> {
     use windows::Win32::UI::Controls::Dialogs::{
@@ -71,6 +79,21 @@ fn choose_csv_path(default_name: &str) -> Option<PathBuf> {
 }
 
 fn set_heatmap(ui: &MainWindow, rows: &[storage::database::KeyTotal]) {
+    ui.set_heat_esc(heat_count(rows, "01"));
+    ui.set_heat_1(heat_count(rows, "02"));
+    ui.set_heat_2(heat_count(rows, "03"));
+    ui.set_heat_3(heat_count(rows, "04"));
+    ui.set_heat_4(heat_count(rows, "05"));
+    ui.set_heat_5(heat_count(rows, "06"));
+    ui.set_heat_6(heat_count(rows, "07"));
+    ui.set_heat_7(heat_count(rows, "08"));
+    ui.set_heat_8(heat_count(rows, "09"));
+    ui.set_heat_9(heat_count(rows, "0a"));
+    ui.set_heat_0(heat_count(rows, "0b"));
+    ui.set_heat_minus(heat_count(rows, "0c"));
+    ui.set_heat_equal(heat_count(rows, "0d"));
+    ui.set_heat_backspace(heat_count(rows, "0e"));
+    ui.set_heat_tab(heat_count(rows, "0f"));
     for (name, scan) in [
         ("q", "10"),
         ("w", "11"),
@@ -130,6 +153,21 @@ fn set_heatmap(ui: &MainWindow, rows: &[storage::database::KeyTotal]) {
             _ => {}
         }
     }
+    ui.set_heat_left_bracket(heat_count(rows, "1a"));
+    ui.set_heat_right_bracket(heat_count(rows, "1b"));
+    ui.set_heat_enter(heat_count(rows, "1c"));
+    ui.set_heat_caps(heat_count(rows, "3a"));
+    ui.set_heat_semicolon(heat_count(rows, "27"));
+    ui.set_heat_quote(heat_count(rows, "28"));
+    ui.set_heat_backtick(heat_count(rows, "29"));
+    ui.set_heat_left_shift(heat_count(rows, "2a"));
+    ui.set_heat_backslash(heat_count(rows, "2b"));
+    ui.set_heat_comma(heat_count(rows, "33"));
+    ui.set_heat_period(heat_count(rows, "34"));
+    ui.set_heat_slash(heat_count(rows, "35"));
+    ui.set_heat_right_shift(heat_count(rows, "36"));
+    ui.set_heat_ctrl(heat_count(rows, "1d"));
+    ui.set_heat_alt(heat_count(rows, "38"));
     ui.set_heat_space(heat_count(rows, "39"));
 }
 
@@ -166,7 +204,7 @@ fn refresh_overview(
     ui.set_mouse_text(mouse.to_string().into());
     ui.set_wheel_text(wheel.to_string().into());
     ui.set_app_text(apps.to_string().into());
-    let ranking = database
+    let ranking_rows = database
         .app_totals_sorted(date, sort.as_query())?
         .into_iter()
         .take(8)
@@ -182,9 +220,20 @@ fn refresh_overview(
                 row.wheel
             )
         })
-        .collect::<Vec<_>>()
-        .join("\n");
-    ui.set_ranking_text(ranking.into());
+        .collect::<Vec<_>>();
+    ui.set_ranking_text(
+        if ranking_rows.is_empty() {
+            "暂无应用输入记录".to_string()
+        } else {
+            "点击下方应用可查看详情".to_string()
+        }
+        .into(),
+    );
+    let ranking_items = ranking_rows
+        .iter()
+        .map(|row| SharedString::from(row.as_str()))
+        .collect::<Vec<_>>();
+    ui.set_ranking_items(ranking_items.as_slice().into());
     ui.set_ranking_sort_text(sort.label().into());
     ui.set_heatmap_title("键盘热力图（当前日期，全局）".into());
     let all_keys = database.input_ranking(date, None, "keyboard")?;
@@ -248,7 +297,6 @@ fn refresh_detail(
         "未记录详细数据".to_string()
     } else {
         keys.iter()
-            .take(12)
             .map(|row| format!("{}:{}", row.code, row.count))
             .collect::<Vec<_>>()
             .join("  ")
@@ -293,22 +341,19 @@ fn refresh_detail(
 
 fn main() -> anyhow::Result<()> {
     #[cfg(windows)]
-    {
-        unsafe {
-            let _instance_mutex =
-                CreateMutexW(None, false, w!("Global\\kb_count_single_instance"))?;
-            if GetLastError().0 == 183 {
-                if let Ok(window) = FindWindowW(None, w!("kb_count"))
-                    && !window.0.is_null()
-                {
-                    let _ = ShowWindow(window, SW_RESTORE);
-                    let _ = SetForegroundWindow(window);
-                }
-                return Ok(());
+    let _instance_mutex = unsafe {
+        let mutex = CreateMutexW(None, false, w!("Global\\kb_count_single_instance"))?;
+        if GetLastError().0 == 183 {
+            if let Ok(window) = FindWindowW(None, w!("kb_count"))
+                && !window.0.is_null()
+            {
+                let _ = ShowWindow(window, SW_RESTORE);
+                let _ = SetForegroundWindow(window);
             }
-            let _ = _instance_mutex;
+            return Ok(());
         }
-    }
+        mutex
+    };
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::new("info,fontdb=off"))
         .init();
@@ -317,9 +362,15 @@ fn main() -> anyhow::Result<()> {
     let dir = config::app_dir()?;
     tracing::info!(data_dir = %dir.display(), "portable data directory initialized");
     let config_state = Arc::new(Mutex::new(cfg.clone()));
-    let db = Arc::new(Mutex::new(storage::database::Database::open(
-        &dir.join("stats.db"),
-    )?));
+    let db_path = dir.join("stats.db");
+    let db = Arc::new(Mutex::new(
+        storage::database::Database::open(&db_path).with_context(|| {
+            format!(
+                "无法在 EXE 所在目录初始化数据库 {}。当前目录没有写入权限，请将 kb_count 移动到具有读写权限的文件夹。",
+                db_path.display()
+            )
+        })?,
+    ));
     let enabled = Arc::new(AtomicBool::new(cfg.capture_enabled));
     let events = collector::start();
     let db_writer = Arc::clone(&db);
@@ -330,9 +381,11 @@ fn main() -> anyhow::Result<()> {
     thread::Builder::new()
         .name("kb-stats-writer".into())
         .spawn(move || {
+            let mut pending = Vec::<stats::event::InputEvent>::new();
             let flush = |events: &mpsc::Receiver<stats::event::InputEvent>,
                          db: &Arc<Mutex<storage::database::Database>>,
-                         enabled: &AtomicBool| {
+                         enabled: &AtomicBool,
+                         pending: &mut Vec<stats::event::InputEvent>| {
                 let mut aggregator = Aggregator::default();
                 let policies = db
                     .lock()
@@ -343,27 +396,37 @@ fn main() -> anyhow::Result<()> {
                     let mode = CaptureMode::from_overrides(&event.app_path, &policies);
                     aggregator.record(event, mode);
                 }
-                if !enabled.load(Ordering::Relaxed) {
+                if enabled.load(Ordering::Relaxed) {
+                    pending.extend(aggregator.drain());
+                }
+                if pending.is_empty() {
                     return;
                 }
-                let events = aggregator.drain();
-                if let Err(error) = db
+                let result = db
                     .lock()
                     .expect("database mutex poisoned")
-                    .record_batch(&events)
-                {
-                    tracing::error!(%error, "failed to persist aggregate batch");
+                    .record_batch(pending);
+                if let Err(error) = result {
+                    let dropped = pending.len().saturating_sub(16_384);
+                    if dropped > 0 {
+                        pending.drain(..dropped);
+                        tracing::error!(%error, dropped, "database unavailable; aggregate batch was bounded");
+                    } else {
+                        tracing::error!(%error, "failed to persist aggregate batch; will retry");
+                    }
+                } else {
+                    pending.clear();
                 }
             };
             loop {
                 match shutdown_rx.recv_timeout(Duration::from_secs(flush_seconds)) {
                     Ok(()) => {
-                        flush(&events, &db_writer, &writer_enabled);
+                        flush(&events, &db_writer, &writer_enabled, &mut pending);
                         let _ = shutdown_ack_tx.send(());
                         break;
                     }
                     Err(mpsc::RecvTimeoutError::Timeout) => {
-                        flush(&events, &db_writer, &writer_enabled);
+                        flush(&events, &db_writer, &writer_enabled, &mut pending);
                     }
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 }
@@ -532,6 +595,22 @@ fn main() -> anyhow::Result<()> {
             if let Ok(database) = db_for_sort.lock() {
                 let _ = refresh_overview(&ui, &database, &date, RankingSort::Total);
             }
+        }
+    });
+    let ui_for_ranking = ui.as_weak();
+    let db_for_ranking = Arc::clone(&db);
+    ui.on_ranking_app_clicked(move |item| {
+        let Some(ui) = ui_for_ranking.upgrade() else {
+            return;
+        };
+        if let Some(path) = ranking_path(item.as_str()) {
+            ui.set_detail_path(path.into());
+            ui.set_policy_path(path.into());
+            let date = ui.get_date_text().to_string();
+            if let Ok(database) = db_for_ranking.lock() {
+                let _ = refresh_detail(&ui, &database, &date, path);
+            }
+            ui.set_status_text("已打开应用详情".into());
         }
     });
     let db_for_detail = Arc::clone(&db);

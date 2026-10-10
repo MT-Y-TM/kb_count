@@ -1,5 +1,5 @@
 use crate::stats::event::InputEvent;
-use crate::stats::policy::CaptureMode;
+use crate::stats::policy::{CaptureMode, normalize_app_path};
 use std::collections::HashMap;
 #[derive(Default)]
 #[allow(dead_code)]
@@ -16,6 +16,7 @@ impl Aggregator {
             event.code = "total".into();
             event.detailed = false;
         }
+        event.app_path = normalize_app_path(&event.app_path);
         let key = (
             event.local_date.clone(),
             event.app_path.clone(),
