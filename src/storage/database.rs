@@ -228,6 +228,33 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn schema_migration_initializes_version_one() {
+        let conn = Connection::open_in_memory().expect("connection");
+        migrate(&conn).expect("migration");
+        let version: i64 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .expect("version");
+        assert_eq!(version, SCHEMA_VERSION);
+        let table_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='daily_input_counts'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("schema table");
+        assert_eq!(table_count, 1);
+    }
+
+    #[test]
+    fn schema_migration_rejects_newer_database() {
+        let conn = Connection::open_in_memory().expect("connection");
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION + 1)
+            .expect("version");
+        assert!(migrate(&conn).is_err());
+    }
+
     #[test]
     fn totals_only_event_updates_totals_without_key_rows() {
         let mut db = Database::open(Path::new(":memory:")).expect("database");
