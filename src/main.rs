@@ -99,16 +99,64 @@ fn main() -> anyhow::Result<()> {
             )
         })
         .collect::<Vec<_>>()
-        .join("\\n");
+        .join("\n");
     ui.set_export_text("未导出".into());
     ui.set_ranking_text(ranking.into());
     let enabled_for_ui = Arc::clone(&enabled);
+    let ui_for_state = ui.as_weak();
     let db_for_export = Arc::clone(&db);
     let dir_for_export = dir.clone();
     let date_for_export = date.clone();
+    let ui_for_export = ui.as_weak();
+    let db_for_date = Arc::clone(&db);
+    let ui_for_date = ui.as_weak();
+    ui.on_today_clicked({
+        let db = Arc::clone(&db_for_date);
+        let ui = ui_for_date.clone();
+        move || {
+            let date = Local::now().format("%Y-%m-%d").to_string();
+            if let Ok((k, m, w, a)) = db.lock().expect("database mutex poisoned").totals(&date) {
+                if let Some(ui) = ui.upgrade() {
+                    ui.set_date_text(date.into());
+                    ui.set_keyboard_text(k.to_string().into());
+                    ui.set_mouse_text(m.to_string().into());
+                    ui.set_wheel_text(w.to_string().into());
+                    ui.set_app_text(a.to_string().into());
+                }
+            }
+        }
+    });
+    ui.on_yesterday_clicked({
+        let db = db_for_date;
+        let ui = ui_for_date;
+        move || {
+            let date = (Local::now() - chrono::Duration::days(1))
+                .format("%Y-%m-%d")
+                .to_string();
+            if let Ok((k, m, w, a)) = db.lock().expect("database mutex poisoned").totals(&date) {
+                if let Some(ui) = ui.upgrade() {
+                    ui.set_date_text(date.into());
+                    ui.set_keyboard_text(k.to_string().into());
+                    ui.set_mouse_text(m.to_string().into());
+                    ui.set_wheel_text(w.to_string().into());
+                    ui.set_app_text(a.to_string().into());
+                }
+            }
+        }
+    });
     ui.on_pause_clicked(move || {
         let value = !enabled_for_ui.load(Ordering::Relaxed);
         enabled_for_ui.store(value, Ordering::Relaxed);
+        if let Some(ui) = ui_for_state.upgrade() {
+            ui.set_status_text(
+                if value {
+                    "统计运行中"
+                } else {
+                    "统计已暂停"
+                }
+                .into(),
+            );
+        }
     });
     ui.on_export_clicked(move || {
         let path = dir_for_export.join(format!("kb_count-{}.csv", date_for_export));
@@ -121,6 +169,9 @@ fn main() -> anyhow::Result<()> {
             Err(error) => format!("导出失败：{error}"),
         };
         tracing::info!(%text);
+        if let Some(ui) = ui_for_export.upgrade() {
+            ui.set_export_text(text.into());
+        }
     });
     ui.run()?;
     Ok(())
