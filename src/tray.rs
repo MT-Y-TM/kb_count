@@ -13,7 +13,7 @@ pub fn start() {
         .spawn(|| thread::park());
 }
 #[cfg(windows)]
-#[allow(unsafe_op_in_unsafe_fn)]
+#[allow(unsafe_op_in_unsafe_fn, clippy::field_reassign_with_default)]
 unsafe fn run_windows() {
     use windows::Win32::UI::Shell::{
         NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW,
@@ -81,3 +81,4 @@ extern "system" fn proc(
 ) -> windows::Win32::Foundation::LRESULT {
     unsafe { windows::Win32::UI::WindowsAndMessaging::DefWindowProcW(hwnd, msg, w, l) }
 }
+
