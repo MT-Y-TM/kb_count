@@ -27,7 +27,7 @@ fn main() -> anyhow::Result<()> {
         loop {
             thread::sleep(Duration::from_secs(flush_seconds));
             let mut aggregator = Aggregator::default();
-            while let Ok(event) = events.try_recv() { aggregator.record(event, CaptureMode::Detailed); }
+            while let Ok(event) = events.try_recv() { let mode = CaptureMode::for_application(&event.app_path); aggregator.record(event, mode); }
             if !writer_enabled.load(Ordering::Relaxed) { continue; }
             for event in aggregator.drain() {
                 if let Err(error) = db_writer.lock().expect("database mutex poisoned").record(&event) { tracing::error!(%error, "failed to persist aggregate"); }
@@ -57,4 +57,5 @@ fn main() -> anyhow::Result<()> {
     ui.run()?;
     Ok(())
 }
+
 
