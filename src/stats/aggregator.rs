@@ -1,11 +1,9 @@
 use std::collections::HashMap;
 use crate::stats::event::InputEvent;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CaptureMode { Detailed, TotalsOnly, Excluded }
+use crate::stats::policy::CaptureMode;
 
 #[derive(Default)]
-pub struct Aggregator { counts: HashMap<(String,String,String,String), i64> }
+#[allow(dead_code)]`r`npub struct Aggregator { counts: HashMap<(String,String,String,String), i64> }
 impl Aggregator {
     pub fn record(&mut self, mut event: InputEvent, mode: CaptureMode) {
         if mode == CaptureMode::Excluded { return; }
@@ -14,11 +12,10 @@ impl Aggregator {
         *self.counts.entry(key).or_default() += event.count;
     }
     pub fn drain(&mut self) -> Vec<InputEvent> {
-        let mut out=Vec::with_capacity(self.counts.len());
-        for ((date,path,kind,code),count) in self.counts.drain() {
+        self.counts.drain().map(|((date,path,kind,code),count)| {
             let name=std::path::Path::new(&path).file_name().and_then(|x|x.to_str()).unwrap_or("Unknown").to_string();
-            out.push(InputEvent { local_date:date,app_name:name,app_path:path,input_type:kind.clone(),code,count,keyboard_count:if kind=="keyboard" {count} else {0},mouse_count:if kind=="mouse" {count} else {0},wheel_units:if kind=="wheel" {count} else {0} });
-        }
-        out
+            InputEvent { local_date:date,app_name:name,app_path:path,input_type:kind.clone(),code,count,keyboard_count:if kind=="keyboard" {count} else {0},mouse_count:if kind=="mouse" {count} else {0},wheel_units:if kind=="wheel" {count} else {0} }
+        }).collect()
     }
 }
+
