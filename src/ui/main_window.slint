@@ -1,0 +1,40 @@
+export component MainWindow inherits Window {
+    in property <string> status_text;
+    in property <string> date_text;
+    in property <string> keyboard_text;
+    in property <string> mouse_text;
+    in property <string> wheel_text;
+    in property <string> app_text;
+    callback pause_clicked();
+    title: "kb_count";
+    width: 720px;
+    height: 460px;
+    background: #f5f6f8;
+    VerticalLayout {
+        padding: 24px;
+        spacing: 16px;
+        Text { text: "kb_count"; font-size: 28px; color: #17202a; }
+        Text { text: date_text; color: #566573; }
+        Rectangle { height: 1px; background: #d5d8dc; }
+        HorizontalLayout {
+            spacing: 12px;
+            MetricCard { label: "键盘敲击"; value: keyboard_text; }
+            MetricCard { label: "鼠标点击"; value: mouse_text; }
+            MetricCard { label: "滚轮单位"; value: wheel_text; }
+            MetricCard { label: "活跃应用"; value: app_text; }
+        }
+        Rectangle { height: 1px; background: #d5d8dc; }
+        Text { text: status_text; color: #2471a3; }
+        Button { text: "暂停 / 恢复统计"; clicked => { root.pause_clicked(); } }
+        Text { text: "数据保存在可执行文件所在目录。"; color: #7b7d7d; }
+    }
+}
+component MetricCard inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    width: 150px;
+    height: 100px;
+    background: white;
+    border-radius: 8px;
+    VerticalLayout { padding: 12px; Text { text: label; color: #566573; } Text { text: value; font-size: 24px; color: #17202a; } }
+}
