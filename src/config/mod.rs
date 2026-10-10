@@ -6,6 +6,8 @@ pub struct Config {
     pub capture_enabled: bool,
     pub flush_interval_seconds: u64,
     pub start_with_windows: bool,
+    #[serde(default)]
+    pub dark_mode: bool,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -13,6 +15,7 @@ impl Default for Config {
             capture_enabled: true,
             flush_interval_seconds: 5,
             start_with_windows: false,
+            dark_mode: false,
         }
     }
 }

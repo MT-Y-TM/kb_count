@@ -392,6 +392,15 @@ fn main() -> anyhow::Result<()> {
         .into(),
     );
     ui.set_clear_button_text("清空统计数据".into());
+    ui.set_dark_mode(cfg.dark_mode);
+    ui.set_theme_text(
+        if cfg.dark_mode {
+            "主题：深色"
+        } else {
+            "主题：浅色"
+        }
+        .into(),
+    );
     let enabled_for_ui = Arc::clone(&enabled);
     let ui_for_state = ui.as_weak();
     let db_for_export = Arc::clone(&db);
@@ -580,6 +589,26 @@ fn main() -> anyhow::Result<()> {
                     ui.set_settings_text(format!("开机启动设置失败：{error}").into());
                 }
             }
+        }
+    });
+    let theme_config = Arc::clone(&config_state);
+    let theme_ui = ui.as_weak();
+    ui.on_theme_clicked(move || {
+        let mut config = theme_config.lock().expect("config mutex poisoned");
+        config.dark_mode = !config.dark_mode;
+        if let Err(error) = config::save(&config) {
+            tracing::error!(%error, "failed to save theme configuration");
+        }
+        if let Some(ui) = theme_ui.upgrade() {
+            ui.set_dark_mode(config.dark_mode);
+            ui.set_theme_text(
+                if config.dark_mode {
+                    "主题：深色"
+                } else {
+                    "主题：浅色"
+                }
+                .into(),
+            );
         }
     });
     let clear_pending = Arc::new(AtomicBool::new(false));

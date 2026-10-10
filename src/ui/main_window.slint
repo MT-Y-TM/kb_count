@@ -2,11 +2,12 @@ import { Button, LineEdit } from "std-widgets.slint";
 component MetricCard inherits Rectangle {
     in property <string> label;
     in property <string> value;
+    in property <bool> dark;
     width: 150px;
     height: 100px;
-    background: white;
+    background: dark ? #374151 : white;
     border-radius: 8px;
-    VerticalLayout { padding: 12px; Text { text: label; color: #566573; } Text { text: value; font-size: 24px; color: #17202a; } }
+    VerticalLayout { padding: 12px; Text { text: label; color: dark ? #d1d5db : #566573; } Text { text: value; font-size: 24px; color: dark ? white : #17202a; } }
 }
 component HeatKey inherits Rectangle {
     in property <string> label;
@@ -33,6 +34,7 @@ export component MainWindow inherits Window {
     in property <string> settings_text;
     in property <string> startup_text;
     in property <string> clear_button_text;
+    in property <string> theme_text;
     in property <int> heat_q;
     in property <int> heat_w;
     in property <int> heat_e;
@@ -63,6 +65,7 @@ export component MainWindow inherits Window {
     in-out property <string> query_date;
     in-out property <string> detail_path;
     in-out property <string> policy_path;
+    in-out property <bool> dark_mode;
     callback pause_clicked();
     callback export_clicked();
     callback today_clicked();
@@ -77,23 +80,24 @@ export component MainWindow inherits Window {
     callback policy_excluded_clicked();
     callback startup_clicked();
     callback clear_data_clicked();
+    callback theme_clicked();
     title: "kb_count";
     width: 720px;
     height: 760px;
-    background: #f5f6f8;
+    background: dark_mode ? #111827 : #f5f6f8;
     VerticalLayout {
         padding: 24px;
         spacing: 16px;
-        Text { text: "kb_count"; font-size: 28px; color: #17202a; }
+        Text { text: "kb_count"; font-size: 28px; color: dark_mode ? white : #17202a; }
         HorizontalLayout { spacing: 8px; Text { text: date_text; color: #566573; } Button { text: "今日"; clicked => { root.today_clicked(); } } Button { text: "昨日"; clicked => { root.yesterday_clicked(); } } }
         Rectangle { height: 1px; background: #d5d8dc; }
         HorizontalLayout { spacing: 8px; LineEdit { text <=> root.query_date; placeholder-text: "YYYY-MM-DD"; } Button { text: "查询日期"; clicked => { root.query_clicked(); } } }
         HorizontalLayout {
             spacing: 12px;
-            MetricCard { label: "键盘敲击"; value: keyboard_text; }
-            MetricCard { label: "鼠标点击"; value: mouse_text; }
-            MetricCard { label: "滚轮单位"; value: wheel_text; }
-            MetricCard { label: "活跃应用"; value: app_text; }
+            MetricCard { label: "键盘敲击"; value: keyboard_text; dark: root.dark_mode; }
+            MetricCard { label: "鼠标点击"; value: mouse_text; dark: root.dark_mode; }
+            MetricCard { label: "滚轮单位"; value: wheel_text; dark: root.dark_mode; }
+            MetricCard { label: "活跃应用"; value: app_text; dark: root.dark_mode; }
         }
         Rectangle { height: 1px; background: #d5d8dc; }
         Text { text: status_text; color: #2471a3; }
@@ -116,7 +120,7 @@ export component MainWindow inherits Window {
         Text { text: detail_text; color: #566573; wrap: word-wrap; }
         HorizontalLayout { spacing: 8px; LineEdit { text <=> root.policy_path; placeholder-text: "要设置策略的应用完整路径"; } Button { text: "详细"; clicked => { root.policy_detailed_clicked(); } } Button { text: "仅总量"; clicked => { root.policy_totals_clicked(); } } Button { text: "排除"; clicked => { root.policy_excluded_clicked(); } } }
         Text { text: settings_text; color: #566573; wrap: word-wrap; }
-        HorizontalLayout { spacing: 8px; Button { text: startup_text; clicked => { root.startup_clicked(); } } Button { text: clear_button_text; clicked => { root.clear_data_clicked(); } } }
+        HorizontalLayout { spacing: 8px; Button { text: startup_text; clicked => { root.startup_clicked(); } } Button { text: theme_text; clicked => { root.theme_clicked(); } } Button { text: clear_button_text; clicked => { root.clear_data_clicked(); } } }
         Text { text: "数据保存在可执行文件所在目录。"; color: #7b7d7d; }
     }
 }
