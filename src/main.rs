@@ -2,6 +2,7 @@ mod collector;
 mod config;
 mod stats;
 mod storage;
+mod tray;
 slint::include_modules!();
 use crate::stats::aggregator::Aggregator;
 use crate::stats::policy::CaptureMode;
@@ -31,6 +32,7 @@ fn main() -> anyhow::Result<()> {
         }
     }
     tracing_subscriber::fmt::init();
+    tray::start();
     let cfg = config::load_or_create()?;
     let dir = config::app_dir()?;
     let db = Arc::new(Mutex::new(storage::database::Database::open(
