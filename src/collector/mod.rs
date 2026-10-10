@@ -18,7 +18,7 @@ mod raw_input {
     pub fn run(_tx: Sender<InputEvent>) {
         // The message-loop boundary is deliberately isolated from aggregation/UI.
         // Raw Input registration is added here for the Windows release target.
-        unsafe { let mut msg = MSG::default(); while GetMessageW(&mut msg, HWND(0), 0, 0).into() { TranslateMessage(&msg); DispatchMessageW(&msg); } }
+        unsafe { let mut msg = MSG::default(); while GetMessageW(&mut msg, HWND(std::ptr::null_mut()), 0, 0).into() { TranslateMessage(&msg); DispatchMessageW(&msg); } }
     }
     #[allow(dead_code)] fn wnd_proc(_hwnd: HWND, _msg: u32, _w: WPARAM, _l: LPARAM) -> LRESULT { LRESULT(0) }
 }
