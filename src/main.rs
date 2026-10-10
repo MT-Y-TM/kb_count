@@ -216,6 +216,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
     });
+    ui.hide()?;
     ui.run()?;
     Ok(())
 }
