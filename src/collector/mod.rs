@@ -253,10 +253,9 @@ mod raw_input {
             .unwrap_or("Unknown")
             .to_string();
         let result = (name, path, Instant::now());
-        cache
-            .lock()
-            .expect("process cache poisoned")
-            .insert(pid, result.clone());
+        let mut cache = cache.lock().expect("process cache poisoned");
+        cache.retain(|_, (_, _, checked_at)| checked_at.elapsed() < Duration::from_secs(600));
+        cache.insert(pid, result.clone());
         (result.0, result.1)
     }
 
