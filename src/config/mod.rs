@@ -4,13 +4,15 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub capture_enabled: bool,
-    pub flush_interval_seconds: u64,\n    pub start_with_windows: bool,
+    pub flush_interval_seconds: u64,
+    pub start_with_windows: bool,
 }
 impl Default for Config {
     fn default() -> Self {
         Self {
             capture_enabled: true,
             flush_interval_seconds: 5,
+            start_with_windows: false,
         }
     }
 }
@@ -37,7 +39,4 @@ pub fn load_or_create() -> Result<Config> {
     })?;
     Ok(cfg)
 }
-
 pub mod startup;
-
-
