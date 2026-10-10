@@ -50,18 +50,28 @@ impl Database {
             .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
         Ok(())
     }
+    #[allow(dead_code)]
     pub fn record(&mut self, event: &InputEvent) -> Result<()> {
-        let tx = self.conn.transaction()?;
-        tx.execute("INSERT INTO applications(executable_name,executable_path,display_name,first_seen_at,last_seen_at) VALUES (?1,?2,?3,datetime('now'),datetime('now')) ON CONFLICT(executable_path) DO UPDATE SET last_seen_at=datetime('now')", params![event.app_name,event.app_path,event.app_name])?;
-        let id: i64 = tx.query_row(
-            "SELECT id FROM applications WHERE executable_path=?1",
-            [&event.app_path],
-            |r| r.get(0),
-        )?;
-        if event.detailed {
-            tx.execute("INSERT INTO daily_input_counts VALUES (?1,?2,?3,?4,?5) ON CONFLICT(local_date,app_id,input_type,input_code) DO UPDATE SET count=count+excluded.count",params![event.local_date,id,event.input_type,event.code,event.count])?;
+        self.record_batch(std::slice::from_ref(event))
+    }
+
+    pub fn record_batch(&mut self, events: &[InputEvent]) -> Result<()> {
+        if events.is_empty() {
+            return Ok(());
         }
-        tx.execute("INSERT INTO daily_app_totals(local_date,app_id,keyboard_count,mouse_click_count,wheel_units) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(local_date,app_id) DO UPDATE SET keyboard_count=keyboard_count+excluded.keyboard_count,mouse_click_count=mouse_click_count+excluded.mouse_click_count,wheel_units=wheel_units+excluded.wheel_units",params![event.local_date,id,event.keyboard_count,event.mouse_count,event.wheel_units])?;
+        let tx = self.conn.transaction()?;
+        for event in events {
+            tx.execute("INSERT INTO applications(executable_name,executable_path,display_name,first_seen_at,last_seen_at) VALUES (?1,?2,?3,datetime('now'),datetime('now')) ON CONFLICT(executable_path) DO UPDATE SET last_seen_at=datetime('now')", params![event.app_name,event.app_path,event.app_name])?;
+            let id: i64 = tx.query_row(
+                "SELECT id FROM applications WHERE executable_path=?1",
+                [&event.app_path],
+                |r| r.get(0),
+            )?;
+            if event.detailed {
+                tx.execute("INSERT INTO daily_input_counts VALUES (?1,?2,?3,?4,?5) ON CONFLICT(local_date,app_id,input_type,input_code) DO UPDATE SET count=count+excluded.count",params![event.local_date,id,event.input_type,event.code,event.count])?;
+            }
+            tx.execute("INSERT INTO daily_app_totals(local_date,app_id,keyboard_count,mouse_click_count,wheel_units) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(local_date,app_id) DO UPDATE SET keyboard_count=keyboard_count+excluded.keyboard_count,mouse_click_count=mouse_click_count+excluded.mouse_click_count,wheel_units=wheel_units+excluded.wheel_units",params![event.local_date,id,event.keyboard_count,event.mouse_count,event.wheel_units])?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -234,5 +244,38 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn record_batch_accumulates_multiple_events() {
+        let mut db = Database::open(Path::new(":memory:")).expect("database");
+        let events = [
+            InputEvent {
+                local_date: "2026-10-11".into(),
+                app_name: "editor.exe".into(),
+                app_path: "C:/Apps/editor.exe".into(),
+                input_type: "keyboard".into(),
+                code: "scan:1".into(),
+                count: 2,
+                keyboard_count: 2,
+                mouse_count: 0,
+                wheel_units: 0,
+                detailed: true,
+            },
+            InputEvent {
+                local_date: "2026-10-11".into(),
+                app_name: "editor.exe".into(),
+                app_path: "C:/Apps/editor.exe".into(),
+                input_type: "mouse".into(),
+                code: "left".into(),
+                count: 3,
+                keyboard_count: 0,
+                mouse_count: 3,
+                wheel_units: 0,
+                detailed: true,
+            },
+        ];
+        db.record_batch(&events).expect("record batch");
+        assert_eq!(db.totals("2026-10-11").unwrap(), (2, 3, 0, 1));
     }
 }

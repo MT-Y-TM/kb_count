@@ -84,6 +84,35 @@ fn refresh_overview(
         .join("\n");
     ui.set_ranking_text(ranking.into());
     ui.set_ranking_sort_text(sort.label().into());
+    let keys = database
+        .input_ranking(date, None, "keyboard")?
+        .into_iter()
+        .take(10)
+        .map(|row| format!("{}:{}", row.code, row.count))
+        .collect::<Vec<_>>()
+        .join("  ");
+    let mouse = database
+        .input_ranking(date, None, "mouse")?
+        .into_iter()
+        .map(|row| format!("{}:{}", row.code, row.count))
+        .collect::<Vec<_>>()
+        .join("  ");
+    ui.set_frequency_text(
+        format!(
+            "全局按键排行: {}\n鼠标分类统计: {}",
+            if keys.is_empty() {
+                "无详细数据"
+            } else {
+                &keys
+            },
+            if mouse.is_empty() {
+                "无详细数据"
+            } else {
+                &mouse
+            }
+        )
+        .into(),
+    );
     Ok(())
 }
 
@@ -159,12 +188,6 @@ fn main() -> anyhow::Result<()> {
     let cfg = config::load_or_create()?;
     let dir = config::app_dir()?;
     tracing::info!(data_dir = %dir.display(), "portable data directory initialized");
-    if cfg.start_with_windows
-        && let Ok(exe) = std::env::current_exe()
-        && let Err(error) = config::startup::windows::set_enabled(&exe, true)
-    {
-        tracing::warn!(%error, "failed to refresh Windows startup entry");
-    }
     let config_state = Arc::new(Mutex::new(cfg.clone()));
     let db = Arc::new(Mutex::new(storage::database::Database::open(
         &dir.join("stats.db"),
@@ -195,10 +218,13 @@ fn main() -> anyhow::Result<()> {
                 if !enabled.load(Ordering::Relaxed) {
                     return;
                 }
-                for event in aggregator.drain() {
-                    if let Err(error) = db.lock().expect("database mutex poisoned").record(&event) {
-                        tracing::error!(%error, "failed to persist aggregate");
-                    }
+                let events = aggregator.drain();
+                if let Err(error) = db
+                    .lock()
+                    .expect("database mutex poisoned")
+                    .record_batch(&events)
+                {
+                    tracing::error!(%error, "failed to persist aggregate batch");
                 }
             };
             loop {
@@ -234,10 +260,28 @@ fn main() -> anyhow::Result<()> {
     );
     ui.set_export_text("未导出".into());
     ui.set_detail_text("请输入应用完整路径查询详情。".into());
-    ui.set_settings_text(format!("数据目录: {}\n数据库: stats.db (WAL)", dir.display()).into());
+    let startup_matches = std::env::current_exe()
+        .ok()
+        .and_then(|exe| config::startup::windows::is_configured(&exe).ok())
+        .unwrap_or(false);
+    ui.set_settings_text(
+        format!(
+            "数据目录: {}\n数据库: stats.db (WAL)\n版本: {}{}",
+            dir.display(),
+            env!("CARGO_PKG_VERSION"),
+            if cfg.start_with_windows && !startup_matches {
+                "\n启动项路径与当前 EXE 不一致，请重新启用。"
+            } else {
+                ""
+            }
+        )
+        .into(),
+    );
     ui.set_startup_text(
-        if cfg.start_with_windows {
+        if cfg.start_with_windows && startup_matches {
             "开机启动：已开启"
+        } else if cfg.start_with_windows {
+            "开机启动：路径不一致"
         } else {
             "开机启动：未开启"
         }
@@ -402,7 +446,12 @@ fn main() -> anyhow::Result<()> {
             return;
         };
         let mut config = startup_config.lock().expect("config mutex poisoned");
-        let next = !config.start_with_windows;
+        let configured = config::startup::windows::is_configured(exe).unwrap_or(false);
+        let next = if config.start_with_windows && !configured {
+            true
+        } else {
+            !config.start_with_windows
+        };
         match config::startup::windows::set_enabled(exe, next) {
             Ok(()) => {
                 config.start_with_windows = next;

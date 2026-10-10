@@ -18,6 +18,7 @@ export component MainWindow inherits Window {
     in property <string> export_text;
     in property <string> ranking_text;
     in property <string> ranking_sort_text;
+    in property <string> frequency_text;
     in property <string> detail_text;
     in property <string> settings_text;
     in property <string> startup_text;
@@ -67,6 +68,7 @@ export component MainWindow inherits Window {
         Text { text: export_text; color: #566573; }
         HorizontalLayout { spacing: 8px; Text { text: "应用排行"; font-size: 18px; color: #17202a; } Text { text: ranking_sort_text; color: #566573; } Button { text: "键盘"; clicked => { root.sort_keyboard_clicked(); } } Button { text: "鼠标"; clicked => { root.sort_mouse_clicked(); } } Button { text: "总量"; clicked => { root.sort_total_clicked(); } } }
         Text { text: ranking_text; color: #566573; wrap: word-wrap; }
+        Text { text: frequency_text; color: #566573; wrap: word-wrap; }
         Rectangle { height: 1px; background: #d5d8dc; }
         Text { text: "应用详情与采集策略"; font-size: 18px; color: #17202a; }
         HorizontalLayout { spacing: 8px; LineEdit { text <=> root.detail_path; placeholder-text: "输入应用完整路径"; } Button { text: "查询应用"; clicked => { root.query_app_clicked(); } } }
