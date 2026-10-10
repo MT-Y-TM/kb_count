@@ -317,9 +317,13 @@ mod raw_input {
         } else {
             &mut remainder.0
         };
-        *value += delta;
-        let units = *value / 120;
-        *value %= 120;
+        normalize_delta(value, delta)
+    }
+
+    fn normalize_delta(remainder: &mut i32, delta: i32) -> i64 {
+        *remainder += delta;
+        let units = *remainder / 120;
+        *remainder %= 120;
         i64::from(units)
     }
 
@@ -419,6 +423,22 @@ mod raw_input {
                     );
                 }
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::normalize_delta;
+
+        #[test]
+        fn high_precision_wheel_accumulates_until_one_detent() {
+            let mut remainder = 0;
+            assert_eq!(normalize_delta(&mut remainder, 30), 0);
+            assert_eq!(normalize_delta(&mut remainder, 30), 0);
+            assert_eq!(normalize_delta(&mut remainder, 30), 0);
+            assert_eq!(normalize_delta(&mut remainder, 30), 1);
+            assert_eq!(remainder, 0);
+            assert_eq!(normalize_delta(&mut remainder, -240), -2);
         }
     }
 }
