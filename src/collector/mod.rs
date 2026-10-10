@@ -251,6 +251,7 @@ mod raw_input {
                 keyboard_count: key,
                 mouse_count: mouse,
                 wheel_units: wheel,
+                detailed: true,
             });
         }
     }

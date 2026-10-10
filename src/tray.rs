@@ -81,4 +81,3 @@ extern "system" fn proc(
 ) -> windows::Win32::Foundation::LRESULT {
     unsafe { windows::Win32::UI::WindowsAndMessaging::DefWindowProcW(hwnd, msg, w, l) }
 }
-

@@ -9,4 +9,5 @@ pub struct InputEvent {
     pub keyboard_count: i64,
     pub mouse_count: i64,
     pub wheel_units: i64,
+    pub detailed: bool,
 }

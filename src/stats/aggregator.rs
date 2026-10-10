@@ -14,7 +14,7 @@ impl Aggregator {
         }
         if mode == CaptureMode::TotalsOnly {
             event.code = "total".into();
-            event.input_type = "total".into();
+            event.detailed = false;
         }
         let key = (
             event.local_date.clone(),
@@ -43,6 +43,7 @@ impl Aggregator {
                     keyboard_count: if kind == "keyboard" { count } else { 0 },
                     mouse_count: if kind == "mouse" { count } else { 0 },
                     wheel_units: if kind == "wheel" { count } else { 0 },
+                    detailed: true,
                 }
             })
             .collect()
@@ -65,6 +66,7 @@ mod tests {
                 keyboard_count: 1,
                 mouse_count: 0,
                 wheel_units: 0,
+                detailed: true,
             },
             CaptureMode::Excluded,
         );
@@ -84,6 +86,7 @@ mod tests {
                 keyboard_count: 2,
                 mouse_count: 0,
                 wheel_units: 0,
+                detailed: true,
             },
             CaptureMode::TotalsOnly,
         );
