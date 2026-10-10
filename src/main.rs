@@ -6,6 +6,8 @@ slint::include_modules!();
 use chrono::Local;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use crate::stats::aggregator::Aggregator;
+use crate::stats::policy::CaptureMode;
 use std::time::Duration;
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
@@ -37,3 +39,4 @@ fn main() -> anyhow::Result<()> {
     ui.run()?;
     Ok(())
 }
+

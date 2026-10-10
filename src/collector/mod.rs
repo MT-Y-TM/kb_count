@@ -1,9 +1,9 @@
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
 use crate::stats::event::InputEvent;
 
 pub fn start() -> Receiver<InputEvent> {
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = mpsc::sync_channel(8192);
     thread::Builder::new().name("kb-input-collector".into()).spawn(move || raw_input::run(tx)).expect("unable to start collector");
     rx
 }
@@ -21,10 +21,10 @@ mod raw_input {
     use windows::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION};
     use windows::Win32::UI::Input::{GetRawInputData, RegisterRawInputDevices, RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER, RID_INPUT, RIDEV_INPUTSINK, RIM_TYPEKEYBOARD, RIM_TYPEMOUSE, RIDEV_DEVNOTIFY};
     use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DefWindowProcW, DispatchMessageW, GetForegroundWindow, GetMessageW, GetWindowThreadProcessId, RegisterClassW, TranslateMessage, CS_HREDRAW, CS_VREDRAW, MSG, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP, WM_INPUT};
-    static SENDER: OnceLock<Sender<InputEvent>> = OnceLock::new();
+    static SENDER: OnceLock<SyncSender<InputEvent>> = OnceLock::new();
     static PROCESS_CACHE: OnceLock<Mutex<HashMap<u32, (String, String)>>> = OnceLock::new();
 
-    pub fn run(tx: Sender<InputEvent>) {
+    pub fn run(tx: SyncSender<InputEvent>) {
         let _ = SENDER.set(tx);
         unsafe {
             let instance = GetModuleHandleW(None).expect("module handle");
@@ -75,12 +75,13 @@ mod raw_input {
             x if x == RIM_TYPEMOUSE.0 => { let m = raw.data.mouse; let button = match m.Anonymous.Anonymous.usButtonFlags { 0x0001=>"left",0x0002=>"left_up",0x0004=>"right",0x0008=>"right_up",0x0010=>"middle",0x0020=>"middle_up",0x0040=>"x1",0x0080=>"x2",0x0100=>"wheel",0x0200=>"hwheel",_=>return }; let is_wheel=button=="wheel"||button=="hwheel"; let wheel_units=if is_wheel { let delta=i16::from_ne_bytes(m.Anonymous.Anonymous.usButtonData.to_ne_bytes()) as i64; if delta==0 {0} else {let units=delta/120; if units==0 {delta.signum()} else {units}} } else {0}; (if is_wheel{"wheel"}else{"mouse"}, button.to_string(), 1, 0, if is_wheel{0}else{1}, wheel_units) }
             _ => return,
         };
-        if let Some(sender)=SENDER.get() { let _=sender.send(InputEvent{local_date:date,app_name,app_path,input_type:kind.into(),code,count,keyboard_count:key,mouse_count:mouse,wheel_units:wheel}); }
+        if let Some(sender)=SENDER.get() { let _=sender.try_send(InputEvent{local_date:date,app_name,app_path,input_type:kind.into(),code,count,keyboard_count:key,mouse_count:mouse,wheel_units:wheel}); }
     }
 }
 
 #[cfg(not(windows))]
-mod raw_input { use super::*; pub fn run(_tx: Sender<InputEvent>) { thread::park(); } }
+mod raw_input { use super::*; pub fn run(_tx: SyncSender<InputEvent>) { thread::park(); } }
+
 
 
 
