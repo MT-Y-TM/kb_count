@@ -828,15 +828,15 @@ fn main() -> anyhow::Result<()> {
             tray::Command::Open | tray::Command::Settings => {
                 if let Some(ui) = tray_ui.upgrade() {
                     let date = ui.get_date_text().to_string();
-                    if let Ok(database) = tray_db.lock() {
-                        if let Err(error) = refresh_overview(
+                    if let Ok(database) = tray_db.lock()
+                        && let Err(error) = refresh_overview(
                             &ui,
                             &database,
                             &date,
                             *tray_sort.lock().expect("ranking state poisoned"),
-                        ) {
-                            ui.set_status_text(format!("查询失败：{error}").into());
-                        }
+                        )
+                    {
+                        ui.set_status_text(format!("查询失败：{error}").into());
                     }
                     let _ = ui.show();
                 }
@@ -876,7 +876,7 @@ fn main() -> anyhow::Result<()> {
     let refresh_timer_db = Arc::clone(&db);
     let refresh_timer_sort = Arc::clone(&sort_state);
     let refresh_timer = Timer::default();
-    refresh_timer.start(TimerMode::Repeated, Duration::from_secs(2), move || {
+    refresh_timer.start(TimerMode::Repeated, Duration::from_secs(5), move || {
         let Some(ui) = refresh_timer_ui.upgrade() else {
             return;
         };
