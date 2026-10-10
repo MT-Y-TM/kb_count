@@ -42,4 +42,5 @@ INFO kb_count::collector::raw_input: Raw Input mouse and low-level keyboard coll
 INFO kb_count: portable data directory initialized data_dir=...
 ```
 
-如果只看到 `fontdb: Failed to load ... mstmc.ttf`，这是系统字体扫描警告，不是输入采集错误。请确认运行的是最新 `target/release/kb_count.exe`，并检查日志中的 `data_dir` 与 `stats.db` 是否在同一目录。统计默认每 5 秒批量写入数据库。
+最新版本默认过滤该 fontdb 字体扫描警告。请确认运行的是最新 `target/release/kb_count.exe`，并检查日志中的 `data_dir` 与 `stats.db` 是否在同一目录。统计默认每 5 秒批量写入数据库。
+
