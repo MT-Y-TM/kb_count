@@ -31,7 +31,9 @@ fn main() -> anyhow::Result<()> {
             let _ = _instance_mutex;
         }
     }
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .init();
     tray::start();
     let cfg = config::load_or_create()?;
     let dir = config::app_dir()?;
