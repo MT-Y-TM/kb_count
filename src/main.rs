@@ -6,9 +6,9 @@ slint::include_modules!();
 use chrono::Local;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 use crate::stats::aggregator::Aggregator;
 use crate::stats::policy::CaptureMode;
-use std::time::Duration;
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
     let cfg = config::load_or_create()?;
@@ -19,7 +19,9 @@ fn main() -> anyhow::Result<()> {
     thread::Builder::new().name("kb-stats-writer".into()).spawn(move || {
         loop {
             thread::sleep(Duration::from_secs(5));
-            while let Ok(event) = events.try_recv() {
+            let mut aggregator = Aggregator::default();
+            while let Ok(event) = events.try_recv() { aggregator.record(event, CaptureMode::Detailed); }
+            for event in aggregator.drain() {
                 if let Err(error) = db_writer.lock().expect("database mutex poisoned").record(&event) { tracing::error!(%error, "failed to persist aggregate"); }
             }
         }
@@ -39,5 +41,3 @@ fn main() -> anyhow::Result<()> {
     ui.run()?;
     Ok(())
 }
-
-
