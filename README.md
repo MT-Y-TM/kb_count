@@ -11,7 +11,8 @@ Windows 便携式键盘鼠标输入统计工具，Rust 2024 + Slint + windows-rs
 - 前台进程路径识别和 PID 缓存，无法识别时使用 Unknown。
 - 有界输入队列、内存聚合、5 秒批量写入、暂停/恢复。
 - Detailed / Totals Only / Excluded 隐私策略；浏览器默认 Totals Only，密码管理器默认 Excluded。
-- Windows 单实例互斥。\n- 启动默认隐藏统计窗口，托盘菜单支持打开、暂停/恢复、设置和退出。
+- Windows 单实例互斥。
+- 启动默认隐藏统计窗口，托盘菜单支持打开、暂停/恢复、设置和退出。
 - Slint 总览卡片、今日/昨日切换、应用排行、暂停控制和 CSV 导出。
 - 本地中文 Git 提交，未推送远端。
 
@@ -43,5 +44,6 @@ INFO kb_count: portable data directory initialized data_dir=...
 ```
 
 最新版本默认过滤该 fontdb 字体扫描警告。请确认运行的是最新 `target/release/kb_count.exe`，并检查日志中的 `data_dir` 与 `stats.db` 是否在同一目录。统计默认每 5 秒批量写入数据库。
+
 
 
