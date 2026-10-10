@@ -49,6 +49,62 @@ fn ranking_path(item: &str) -> Option<&str> {
     Some(path.split('\n').next().unwrap_or(path).trim())
 }
 
+fn display_input_code(code: &str) -> String {
+    let mut parts = code.split(':');
+    if parts.next() != Some("scan") {
+        return code.to_string();
+    }
+    let Some(scan) = parts
+        .next()
+        .and_then(|value| u8::from_str_radix(value, 16).ok())
+    else {
+        return code.to_string();
+    };
+    let extended = parts
+        .nth(1)
+        .map(|value| value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let name = match (scan, extended) {
+        (0x01, _) => "Esc",
+        (0x02..=0x0b, _) => {
+            ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"][(scan - 0x02) as usize]
+        }
+        (0x0c, _) => "-",
+        (0x0d, _) => "=",
+        (0x0e, _) => "Backspace",
+        (0x0f, _) => "Tab",
+        (0x10..=0x19, _) => {
+            ["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"][(scan - 0x10) as usize]
+        }
+        (0x1a, _) => "[",
+        (0x1b, _) => "]",
+        (0x1c, true) => "Numpad Enter",
+        (0x1c, false) => "Enter",
+        (0x1d, true) => "Right Ctrl",
+        (0x1d, false) => "Left Ctrl",
+        (0x1e..=0x26, _) => ["A", "S", "D", "F", "G", "H", "J", "K", "L"][(scan - 0x1e) as usize],
+        (0x27, _) => ";",
+        (0x28, _) => "'",
+        (0x29, _) => "`",
+        (0x2a, _) => "Left Shift",
+        (0x2b, _) => "\\",
+        (0x2c..=0x32, _) => ["Z", "X", "C", "V", "B", "N", "M"][(scan - 0x2c) as usize],
+        (0x33, _) => ",",
+        (0x34, _) => ".",
+        (0x35, true) => "Numpad /",
+        (0x35, false) => "/",
+        (0x36, _) => "Right Shift",
+        (0x37, _) => "Numpad *",
+        (0x38, true) => "Right Alt",
+        (0x38, false) => "Left Alt",
+        (0x39, _) => "Space",
+        (0x3a, _) => "Caps Lock",
+        (0x3b..=0x46, _) => return format!("F{}", scan - 0x3a),
+        _ => return code.to_string(),
+    };
+    name.to_string()
+}
+
 #[cfg(windows)]
 fn choose_csv_path(default_name: &str) -> Option<PathBuf> {
     use windows::Win32::UI::Controls::Dialogs::{
@@ -240,7 +296,7 @@ fn refresh_overview(
     let keys = all_keys
         .iter()
         .take(10)
-        .map(|row| format!("{}:{}", row.code, row.count))
+        .map(|row| format!("{}:{}", display_input_code(&row.code), row.count))
         .collect::<Vec<_>>()
         .join("  ");
     let mouse = database
@@ -297,7 +353,7 @@ fn refresh_detail(
         "未记录详细数据".to_string()
     } else {
         keys.iter()
-            .map(|row| format!("{}:{}", row.code, row.count))
+            .map(|row| format!("{}:{}", display_input_code(&row.code), row.count))
             .collect::<Vec<_>>()
             .join("  ")
     };
