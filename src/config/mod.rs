@@ -39,4 +39,15 @@ pub fn load_or_create() -> Result<Config> {
     })?;
     Ok(cfg)
 }
+
+pub fn save(config: &Config) -> Result<()> {
+    let path = app_dir()?.join("config.toml");
+    std::fs::write(&path, toml::to_string_pretty(config)?).with_context(|| {
+        format!(
+            "当前目录没有写入权限，请将 kb_count 移动到具有读写权限的文件夹。路径：{}",
+            path.display()
+        )
+    })?;
+    Ok(())
+}
 pub mod startup;

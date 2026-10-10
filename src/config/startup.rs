@@ -3,8 +3,8 @@
 pub mod windows {
     use std::path::Path;
     use windows::Win32::System::Registry::{
-        HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_SZ, RegCloseKey, RegDeleteValueW,
-        RegOpenKeyExW, RegSetValueExW,
+        HKEY, HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_SZ, REG_VALUE_TYPE,
+        RegCloseKey, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
     };
     use windows::core::w;
     const RUN_KEY: &windows::core::PCWSTR =
@@ -36,8 +36,34 @@ pub mod windows {
         std::slice::from_raw_parts(values.as_ptr() as *const u8, values.len() * 2)
     }
     #[allow(dead_code)]
-    pub fn is_configured() -> bool {
-        false
+    pub fn is_configured(exe: &Path) -> windows::core::Result<bool> {
+        unsafe {
+            let mut key = HKEY::default();
+            let status = RegOpenKeyExW(HKEY_CURRENT_USER, *RUN_KEY, 0, KEY_QUERY_VALUE, &mut key);
+            if status.is_err() {
+                return Ok(false);
+            }
+            let mut value_type = REG_VALUE_TYPE(0);
+            let mut bytes = vec![0u8; 32768];
+            let mut size = bytes.len() as u32;
+            let status = RegQueryValueExW(
+                key,
+                *VALUE_NAME,
+                None,
+                Some(&mut value_type as *mut _),
+                Some(bytes.as_mut_ptr()),
+                Some(&mut size),
+            );
+            let _ = RegCloseKey(key);
+            if status.is_err() || value_type != REG_SZ {
+                return Ok(false);
+            }
+            let value = String::from_utf16_lossy(std::slice::from_raw_parts(
+                bytes.as_ptr() as *const u16,
+                (size as usize / 2).saturating_sub(1),
+            ));
+            Ok(value.eq_ignore_ascii_case(&exe.to_string_lossy()))
+        }
     }
 }
 #[cfg(not(windows))]
@@ -46,5 +72,8 @@ pub mod windows {
     use std::path::Path;
     pub fn set_enabled(_: &Path, _: bool) -> Result<(), std::io::Error> {
         Ok(())
+    }
+    pub fn is_configured(_: &Path) -> Result<bool, std::io::Error> {
+        Ok(false)
     }
 }

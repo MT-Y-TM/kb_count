@@ -17,15 +17,31 @@ export component MainWindow inherits Window {
     in property <string> app_text;
     in property <string> export_text;
     in property <string> ranking_text;
+    in property <string> ranking_sort_text;
+    in property <string> detail_text;
+    in property <string> settings_text;
+    in property <string> startup_text;
+    in property <string> clear_button_text;
     in-out property <string> query_date;
+    in-out property <string> detail_path;
+    in-out property <string> policy_path;
     callback pause_clicked();
     callback export_clicked();
     callback today_clicked();
     callback yesterday_clicked();
     callback query_clicked();
+    callback sort_keyboard_clicked();
+    callback sort_mouse_clicked();
+    callback sort_total_clicked();
+    callback query_app_clicked();
+    callback policy_detailed_clicked();
+    callback policy_totals_clicked();
+    callback policy_excluded_clicked();
+    callback startup_clicked();
+    callback clear_data_clicked();
     title: "kb_count";
     width: 720px;
-    height: 500px;
+    height: 760px;
     background: #f5f6f8;
     VerticalLayout {
         padding: 24px;
@@ -46,11 +62,18 @@ export component MainWindow inherits Window {
         HorizontalLayout {
             spacing: 12px;
             Button { text: "暂停 / 恢复统计"; clicked => { root.pause_clicked(); } }
-            Button { text: "导出今日 CSV"; clicked => { root.export_clicked(); } }
+            Button { text: "导出当前日期 CSV"; clicked => { root.export_clicked(); } }
         }
         Text { text: export_text; color: #566573; }
-        Text { text: "应用排行"; font-size: 18px; color: #17202a; }
+        HorizontalLayout { spacing: 8px; Text { text: "应用排行"; font-size: 18px; color: #17202a; } Text { text: ranking_sort_text; color: #566573; } Button { text: "键盘"; clicked => { root.sort_keyboard_clicked(); } } Button { text: "鼠标"; clicked => { root.sort_mouse_clicked(); } } Button { text: "总量"; clicked => { root.sort_total_clicked(); } } }
         Text { text: ranking_text; color: #566573; wrap: word-wrap; }
+        Rectangle { height: 1px; background: #d5d8dc; }
+        Text { text: "应用详情与采集策略"; font-size: 18px; color: #17202a; }
+        HorizontalLayout { spacing: 8px; LineEdit { text <=> root.detail_path; placeholder-text: "输入应用完整路径"; } Button { text: "查询应用"; clicked => { root.query_app_clicked(); } } }
+        Text { text: detail_text; color: #566573; wrap: word-wrap; }
+        HorizontalLayout { spacing: 8px; LineEdit { text <=> root.policy_path; placeholder-text: "要设置策略的应用完整路径"; } Button { text: "详细"; clicked => { root.policy_detailed_clicked(); } } Button { text: "仅总量"; clicked => { root.policy_totals_clicked(); } } Button { text: "排除"; clicked => { root.policy_excluded_clicked(); } } }
+        Text { text: settings_text; color: #566573; wrap: word-wrap; }
+        HorizontalLayout { spacing: 8px; Button { text: startup_text; clicked => { root.startup_clicked(); } } Button { text: clear_button_text; clicked => { root.clear_data_clicked(); } } }
         Text { text: "数据保存在可执行文件所在目录。"; color: #7b7d7d; }
     }
 }

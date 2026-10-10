@@ -17,7 +17,10 @@ mod raw_input {
     use chrono::Local;
     use std::collections::{HashMap, HashSet};
     use std::ffi::c_void;
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::{
+        Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    };
     use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::System::Threading::{
@@ -31,15 +34,17 @@ mod raw_input {
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         CS_HREDRAW, CS_VREDRAW, CallNextHookEx, CreateWindowExW, DefWindowProcW, DispatchMessageW,
-        GetForegroundWindow, GetMessageW, GetWindowThreadProcessId, KBDLLHOOKSTRUCT,
-        LLKHF_INJECTED, LLKHF_UP, MSG, RegisterClassW, SetWindowsHookExW, TranslateMessage,
-        UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_INPUT, WM_KEYDOWN, WM_SYSKEYDOWN, WNDCLASSW,
-        WS_EX_TOOLWINDOW, WS_POPUP,
+        GA_ROOT, GetAncestor, GetCursorPos, GetForegroundWindow, GetMessageW,
+        GetWindowThreadProcessId, KBDLLHOOKSTRUCT, LLKHF_INJECTED, LLKHF_UP, MSG, RegisterClassW,
+        SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_INPUT,
+        WM_KEYDOWN, WM_SYSKEYDOWN, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP, WindowFromPoint,
     };
     use windows::core::{PWSTR, w};
     static SENDER: OnceLock<SyncSender<InputEvent>> = OnceLock::new();
     static PROCESS_CACHE: OnceLock<Mutex<HashMap<u32, (String, String)>>> = OnceLock::new();
     static PRESSED_KEYS: OnceLock<Mutex<HashSet<u32>>> = OnceLock::new();
+    static WHEEL_REMAINDER: OnceLock<Mutex<(i32, i32)>> = OnceLock::new();
+    static DROPPED_EVENTS: AtomicU64 = AtomicU64::new(0);
 
     pub fn run(tx: SyncSender<InputEvent>) {
         let _ = SENDER.set(tx);
@@ -195,7 +200,23 @@ mod raw_input {
 
     #[allow(unsafe_op_in_unsafe_fn)]
     unsafe fn foreground_process() -> (String, String) {
-        let hwnd = GetForegroundWindow();
+        process_for_window(GetForegroundWindow())
+    }
+
+    #[allow(unsafe_op_in_unsafe_fn)]
+    unsafe fn point_process() -> (String, String) {
+        let mut point = windows::Win32::Foundation::POINT::default();
+        if GetCursorPos(&mut point).is_err() {
+            return ("Unknown".into(), "Unknown".into());
+        }
+        let hwnd = WindowFromPoint(point);
+        let root = GetAncestor(hwnd, GA_ROOT);
+        let root = if root.0.is_null() { hwnd } else { root };
+        process_for_window(root)
+    }
+
+    #[allow(unsafe_op_in_unsafe_fn)]
+    unsafe fn process_for_window(hwnd: HWND) -> (String, String) {
         let mut pid = 0u32;
         if hwnd.0.is_null() || GetWindowThreadProcessId(hwnd, Some(&mut pid)) == 0 || pid == 0 {
             return ("Unknown".into(), "Unknown".into());
@@ -239,6 +260,57 @@ mod raw_input {
             .insert(pid, result.clone());
         result
     }
+    #[allow(clippy::too_many_arguments)]
+    fn emit_event(
+        date: String,
+        app_name: String,
+        app_path: String,
+        input_type: &str,
+        code: String,
+        count: i64,
+        keyboard_count: i64,
+        mouse_count: i64,
+        wheel_units: i64,
+    ) {
+        if let Some(sender) = SENDER.get() {
+            let result = sender.try_send(InputEvent {
+                local_date: date,
+                app_name,
+                app_path,
+                input_type: input_type.into(),
+                code,
+                count,
+                keyboard_count,
+                mouse_count,
+                wheel_units,
+                detailed: true,
+            });
+            if result.is_err() {
+                let dropped = DROPPED_EVENTS.fetch_add(1, Ordering::Relaxed) + 1;
+                if dropped.is_power_of_two() {
+                    tracing::warn!(
+                        dropped,
+                        "input queue is full; aggregate events were dropped"
+                    );
+                }
+            }
+        }
+    }
+
+    fn normalize_wheel(horizontal: bool, delta: i32) -> i64 {
+        let remainder = WHEEL_REMAINDER.get_or_init(|| Mutex::new((0, 0)));
+        let mut remainder = remainder.lock().expect("wheel state poisoned");
+        let value = if horizontal {
+            &mut remainder.1
+        } else {
+            &mut remainder.0
+        };
+        *value += delta;
+        let units = *value / 120;
+        *value %= 120;
+        i64::from(units)
+    }
+
     #[allow(unsafe_op_in_unsafe_fn)]
     unsafe fn handle_input(_hwnd: HWND, lparam: LPARAM) {
         let mut size = 0u32;
@@ -266,74 +338,75 @@ mod raw_input {
         }
         let raw = &*(aligned.as_ptr() as *const RAWINPUT);
         let date = Local::now().format("%Y-%m-%d").to_string();
-        let (app_name, app_path) = foreground_process();
-        let (kind, code, count, key, mouse, wheel) = match raw.header.dwType {
-            x if x == RIM_TYPEKEYBOARD.0 => {
-                let k = raw.data.keyboard;
-                if k.Message != 0x0100 {
-                    return;
-                }
-                (
+        if raw.header.dwType == RIM_TYPEKEYBOARD.0 {
+            let k = raw.data.keyboard;
+            if k.Message == 0x0100 {
+                let (app_name, app_path) = foreground_process();
+                emit_event(
+                    date,
+                    app_name,
+                    app_path,
                     "keyboard",
                     format!("scan:{:02x}:ext:{}", k.MakeCode, (k.Flags & 1) != 0),
                     1,
                     1,
                     0,
                     0,
-                )
+                );
             }
-            x if x == RIM_TYPEMOUSE.0 => {
-                let m = raw.data.mouse;
-                let button = match m.Anonymous.Anonymous.usButtonFlags {
-                    0x0001 => "left",
-                    0x0002 => "left_up",
-                    0x0004 => "right",
-                    0x0008 => "right_up",
-                    0x0010 => "middle",
-                    0x0020 => "middle_up",
-                    0x0040 => "x1",
-                    0x0080 => "x2",
-                    0x0100 => "wheel",
-                    0x0200 => "hwheel",
-                    _ => return,
-                };
-                let is_wheel = button == "wheel" || button == "hwheel";
-                let wheel_units = if is_wheel {
-                    let delta =
-                        i16::from_ne_bytes(m.Anonymous.Anonymous.usButtonData.to_ne_bytes()) as i64;
-                    if delta == 0 {
-                        0
-                    } else {
-                        let units = delta / 120;
-                        if units == 0 { delta.signum() } else { units }
-                    }
-                } else {
-                    0
-                };
-                (
-                    if is_wheel { "wheel" } else { "mouse" },
-                    button.to_string(),
+            return;
+        }
+        if raw.header.dwType != RIM_TYPEMOUSE.0 {
+            return;
+        }
+        let (app_name, app_path) = point_process();
+        let flags = raw.data.mouse.Anonymous.Anonymous.usButtonFlags;
+        for (flag, code) in [
+            (0x0001, "left"),
+            (0x0004, "right"),
+            (0x0010, "middle"),
+            (0x0040, "x1"),
+            (0x0080, "x2"),
+        ] {
+            if flags & flag != 0 {
+                emit_event(
+                    date.clone(),
+                    app_name.clone(),
+                    app_path.clone(),
+                    "mouse",
+                    code.into(),
                     1,
                     0,
-                    if is_wheel { 0 } else { 1 },
-                    wheel_units,
-                )
+                    1,
+                    0,
+                );
             }
-            _ => return,
-        };
-        if let Some(sender) = SENDER.get() {
-            let _ = sender.try_send(InputEvent {
-                local_date: date,
-                app_name,
-                app_path,
-                input_type: kind.into(),
-                code,
-                count,
-                keyboard_count: key,
-                mouse_count: mouse,
-                wheel_units: wheel,
-                detailed: true,
-            });
+        }
+        let delta = i32::from(i16::from_ne_bytes(
+            raw.data
+                .mouse
+                .Anonymous
+                .Anonymous
+                .usButtonData
+                .to_ne_bytes(),
+        ));
+        for (flag, horizontal, code) in [(0x0100, false, "wheel"), (0x0200, true, "hwheel")] {
+            if flags & flag != 0 {
+                let units = normalize_wheel(horizontal, delta);
+                if units != 0 {
+                    emit_event(
+                        date.clone(),
+                        app_name.clone(),
+                        app_path.clone(),
+                        "wheel",
+                        format!("{}_{}", code, if units > 0 { "up" } else { "down" }),
+                        units.abs(),
+                        0,
+                        0,
+                        units,
+                    );
+                }
+            }
         }
     }
 }

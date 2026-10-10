@@ -48,4 +48,11 @@ impl CaptureMode {
             Self::Detailed
         }
     }
+
+    pub fn from_overrides(path: &str, overrides: &std::collections::HashMap<String, Self>) -> Self {
+        overrides
+            .get(path)
+            .copied()
+            .unwrap_or_else(|| Self::for_application(path))
+    }
 }

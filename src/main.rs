@@ -20,7 +20,120 @@ use windows::Win32::Foundation::GetLastError;
 #[cfg(windows)]
 use windows::Win32::System::Threading::CreateMutexW;
 #[cfg(windows)]
+use windows::Win32::UI::WindowsAndMessaging::{
+    FindWindowW, SW_RESTORE, SetForegroundWindow, ShowWindow,
+};
+#[cfg(windows)]
 use windows::core::w;
+
+#[derive(Clone, Copy)]
+enum RankingSort {
+    Keyboard,
+    Mouse,
+    Total,
+}
+
+impl RankingSort {
+    fn as_query(self) -> &'static str {
+        match self {
+            Self::Keyboard => "keyboard",
+            Self::Mouse => "mouse",
+            Self::Total => "total",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Keyboard => "当前按键盘排序",
+            Self::Mouse => "当前按鼠标排序",
+            Self::Total => "当前按总量排序",
+        }
+    }
+}
+
+fn refresh_overview(
+    ui: &MainWindow,
+    database: &storage::database::Database,
+    date: &str,
+    sort: RankingSort,
+) -> anyhow::Result<()> {
+    let (keyboard, mouse, wheel, apps) = database.totals(date)?;
+    ui.set_date_text(date.into());
+    ui.set_query_date(date.into());
+    ui.set_keyboard_text(keyboard.to_string().into());
+    ui.set_mouse_text(mouse.to_string().into());
+    ui.set_wheel_text(wheel.to_string().into());
+    ui.set_app_text(apps.to_string().into());
+    let ranking = database
+        .app_totals_sorted(date, sort.as_query())?
+        .into_iter()
+        .take(8)
+        .enumerate()
+        .map(|(index, row)| {
+            format!(
+                "{}. {}\n   路径: {}\n   键盘:{} 鼠标:{} 滚轮:{}",
+                index + 1,
+                row.app_name,
+                row.app_path,
+                row.keyboard,
+                row.mouse,
+                row.wheel
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    ui.set_ranking_text(ranking.into());
+    ui.set_ranking_sort_text(sort.label().into());
+    Ok(())
+}
+
+fn refresh_detail(
+    ui: &MainWindow,
+    database: &storage::database::Database,
+    date: &str,
+    path: &str,
+) -> anyhow::Result<()> {
+    let Some(detail) = database.app_detail(date, path)? else {
+        ui.set_detail_text("未找到该应用。请先在该应用中产生输入，或检查完整路径。".into());
+        return Ok(());
+    };
+    let keys = database.input_ranking(date, Some(path), "keyboard")?;
+    let mouse = database.input_ranking(date, Some(path), "mouse")?;
+    let key_text = if detail.policy == CaptureMode::TotalsOnly {
+        "未记录详细数据".to_string()
+    } else {
+        keys.into_iter()
+            .take(12)
+            .map(|row| format!("{}:{}", row.code, row.count))
+            .collect::<Vec<_>>()
+            .join("  ")
+    };
+    let mouse_text = mouse
+        .into_iter()
+        .map(|row| format!("{}:{}", row.code, row.count))
+        .collect::<Vec<_>>()
+        .join("  ");
+    ui.set_detail_text(
+        format!(
+            "{}\n路径: {}\n策略: {}\n键盘: {}  鼠标: {}  滚轮: {}\n按键: {}\n鼠标分类: {}",
+            detail.app_name,
+            detail.app_path,
+            detail.policy.as_str(),
+            detail.keyboard,
+            detail.mouse,
+            detail.wheel,
+            key_text,
+            if mouse_text.is_empty() {
+                "无详细数据"
+            } else {
+                &mouse_text
+            }
+        )
+        .into(),
+    );
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     #[cfg(windows)]
     {
@@ -28,6 +141,12 @@ fn main() -> anyhow::Result<()> {
             let _instance_mutex =
                 CreateMutexW(None, false, w!("Global\\kb_count_single_instance"))?;
             if GetLastError().0 == 183 {
+                if let Ok(window) = FindWindowW(None, w!("kb_count"))
+                    && !window.0.is_null()
+                {
+                    let _ = ShowWindow(window, SW_RESTORE);
+                    let _ = SetForegroundWindow(window);
+                }
                 return Ok(());
             }
             let _ = _instance_mutex;
@@ -40,6 +159,13 @@ fn main() -> anyhow::Result<()> {
     let cfg = config::load_or_create()?;
     let dir = config::app_dir()?;
     tracing::info!(data_dir = %dir.display(), "portable data directory initialized");
+    if cfg.start_with_windows
+        && let Ok(exe) = std::env::current_exe()
+        && let Err(error) = config::startup::windows::set_enabled(&exe, true)
+    {
+        tracing::warn!(%error, "failed to refresh Windows startup entry");
+    }
+    let config_state = Arc::new(Mutex::new(cfg.clone()));
     let db = Arc::new(Mutex::new(storage::database::Database::open(
         &dir.join("stats.db"),
     )?));
@@ -57,8 +183,13 @@ fn main() -> anyhow::Result<()> {
                          db: &Arc<Mutex<storage::database::Database>>,
                          enabled: &AtomicBool| {
                 let mut aggregator = Aggregator::default();
+                let policies = db
+                    .lock()
+                    .ok()
+                    .and_then(|database| database.policies().ok())
+                    .unwrap_or_default();
                 while let Ok(event) = events.try_recv() {
-                    let mode = CaptureMode::for_application(&event.app_path);
+                    let mode = CaptureMode::from_overrides(&event.app_path, &policies);
                     aggregator.record(event, mode);
                 }
                 if !enabled.load(Ordering::Relaxed) {
@@ -86,13 +217,13 @@ fn main() -> anyhow::Result<()> {
         })?;
     let ui = MainWindow::new()?;
     let date = Local::now().format("%Y-%m-%d").to_string();
-    let (keyboard, mouse, wheel, apps) = db.lock().unwrap().totals(&date)?;
-    ui.set_date_text(date.clone().into());
-    ui.set_query_date(date.clone().into());
-    ui.set_keyboard_text(keyboard.to_string().into());
-    ui.set_mouse_text(mouse.to_string().into());
-    ui.set_wheel_text(wheel.to_string().into());
-    ui.set_app_text(apps.to_string().into());
+    let sort_state = Arc::new(Mutex::new(RankingSort::Total));
+    refresh_overview(
+        &ui,
+        &db.lock().expect("database mutex poisoned"),
+        &date,
+        RankingSort::Total,
+    )?;
     ui.set_status_text(
         if cfg.capture_enabled {
             "统计运行中"
@@ -101,27 +232,18 @@ fn main() -> anyhow::Result<()> {
         }
         .into(),
     );
-    let ranking = db
-        .lock()
-        .unwrap()
-        .app_totals(&date)?
-        .into_iter()
-        .take(8)
-        .enumerate()
-        .map(|(index, row)| {
-            format!(
-                "{}. {}  键盘:{} 鼠标:{} 滚轮:{}",
-                index + 1,
-                row.app_name,
-                row.keyboard,
-                row.mouse,
-                row.wheel
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
     ui.set_export_text("未导出".into());
-    ui.set_ranking_text(ranking.into());
+    ui.set_detail_text("请输入应用完整路径查询详情。".into());
+    ui.set_settings_text(format!("数据目录: {}\n数据库: stats.db (WAL)", dir.display()).into());
+    ui.set_startup_text(
+        if cfg.start_with_windows {
+            "开机启动：已开启"
+        } else {
+            "开机启动：未开启"
+        }
+        .into(),
+    );
+    ui.set_clear_button_text("清空统计数据".into());
     let enabled_for_ui = Arc::clone(&enabled);
     let ui_for_state = ui.as_weak();
     let db_for_export = Arc::clone(&db);
@@ -132,41 +254,42 @@ fn main() -> anyhow::Result<()> {
     ui.on_today_clicked({
         let db = Arc::clone(&db_for_date);
         let ui = ui_for_date.clone();
+        let sort = Arc::clone(&sort_state);
         move || {
             let date = Local::now().format("%Y-%m-%d").to_string();
-            if let Ok((k, m, w, a)) = db.lock().expect("database mutex poisoned").totals(&date)
-                && let Some(ui) = ui.upgrade()
-            {
-                ui.set_date_text(date.into());
-                ui.set_query_date(ui.get_date_text());
-                ui.set_keyboard_text(k.to_string().into());
-                ui.set_mouse_text(m.to_string().into());
-                ui.set_wheel_text(w.to_string().into());
-                ui.set_app_text(a.to_string().into());
+            if let Some(ui) = ui.upgrade() {
+                let database = db.lock().expect("database mutex poisoned");
+                let _ = refresh_overview(
+                    &ui,
+                    &database,
+                    &date,
+                    *sort.lock().expect("ranking state poisoned"),
+                );
             }
         }
     });
     ui.on_yesterday_clicked({
         let db = db_for_date;
         let ui = ui_for_date;
+        let sort = Arc::clone(&sort_state);
         move || {
             let date = (Local::now() - chrono::Duration::days(1))
                 .format("%Y-%m-%d")
                 .to_string();
-            if let Ok((k, m, w, a)) = db.lock().expect("database mutex poisoned").totals(&date)
-                && let Some(ui) = ui.upgrade()
-            {
-                ui.set_date_text(date.into());
-                ui.set_query_date(ui.get_date_text());
-                ui.set_keyboard_text(k.to_string().into());
-                ui.set_mouse_text(m.to_string().into());
-                ui.set_wheel_text(w.to_string().into());
-                ui.set_app_text(a.to_string().into());
+            if let Some(ui) = ui.upgrade() {
+                let database = db.lock().expect("database mutex poisoned");
+                let _ = refresh_overview(
+                    &ui,
+                    &database,
+                    &date,
+                    *sort.lock().expect("ranking state poisoned"),
+                );
             }
         }
     });
     let db_for_query = Arc::clone(&db);
     let ui_for_query = ui.as_weak();
+    let sort_for_query = Arc::clone(&sort_state);
     ui.on_query_clicked(move || {
         let Some(ui) = ui_for_query.upgrade() else {
             return;
@@ -176,25 +299,182 @@ fn main() -> anyhow::Result<()> {
             ui.set_status_text("日期格式应为 YYYY-MM-DD".into());
             return;
         }
-        match db_for_query
-            .lock()
-            .expect("database mutex poisoned")
-            .totals(&date)
-        {
-            Ok((k, m, w, a)) => {
-                ui.set_date_text(date.into());
-                ui.set_keyboard_text(k.to_string().into());
-                ui.set_mouse_text(m.to_string().into());
-                ui.set_wheel_text(w.to_string().into());
-                ui.set_app_text(a.to_string().into());
+        let database = db_for_query.lock().expect("database mutex poisoned");
+        match refresh_overview(
+            &ui,
+            &database,
+            &date,
+            *sort_for_query.lock().expect("ranking state poisoned"),
+        ) {
+            Ok(()) => {
                 ui.set_status_text("已查询指定日期".into());
             }
             Err(error) => ui.set_status_text(format!("查询失败：{error}").into()),
         }
     });
+    let db_for_sort = Arc::clone(&db);
+    let ui_for_sort = ui.as_weak();
+    let sort_for_keyboard = Arc::clone(&sort_state);
+    ui.on_sort_keyboard_clicked(move || {
+        *sort_for_keyboard.lock().expect("ranking state poisoned") = RankingSort::Keyboard;
+        if let Some(ui) = ui_for_sort.upgrade() {
+            let date = ui.get_date_text().to_string();
+            if let Ok(database) = db_for_sort.lock() {
+                let _ = refresh_overview(&ui, &database, &date, RankingSort::Keyboard);
+            }
+        }
+    });
+    let db_for_sort = Arc::clone(&db);
+    let ui_for_sort = ui.as_weak();
+    let sort_for_mouse = Arc::clone(&sort_state);
+    ui.on_sort_mouse_clicked(move || {
+        *sort_for_mouse.lock().expect("ranking state poisoned") = RankingSort::Mouse;
+        if let Some(ui) = ui_for_sort.upgrade() {
+            let date = ui.get_date_text().to_string();
+            if let Ok(database) = db_for_sort.lock() {
+                let _ = refresh_overview(&ui, &database, &date, RankingSort::Mouse);
+            }
+        }
+    });
+    let db_for_sort = Arc::clone(&db);
+    let ui_for_sort = ui.as_weak();
+    let sort_for_total = Arc::clone(&sort_state);
+    ui.on_sort_total_clicked(move || {
+        *sort_for_total.lock().expect("ranking state poisoned") = RankingSort::Total;
+        if let Some(ui) = ui_for_sort.upgrade() {
+            let date = ui.get_date_text().to_string();
+            if let Ok(database) = db_for_sort.lock() {
+                let _ = refresh_overview(&ui, &database, &date, RankingSort::Total);
+            }
+        }
+    });
+    let db_for_detail = Arc::clone(&db);
+    let ui_for_detail = ui.as_weak();
+    ui.on_query_app_clicked(move || {
+        if let Some(ui) = ui_for_detail.upgrade() {
+            let path = ui.get_detail_path().to_string();
+            let date = ui.get_date_text().to_string();
+            if path.trim().is_empty() {
+                ui.set_detail_text("请输入应用完整路径查询详情。".into());
+            } else if let Ok(database) = db_for_detail.lock() {
+                let _ = refresh_detail(&ui, &database, &date, path.trim());
+            }
+        }
+    });
+    let db_for_policy = Arc::clone(&db);
+    let ui_for_policy = ui.as_weak();
+    let set_policy = Arc::new(move |mode: CaptureMode| {
+        if let Some(ui) = ui_for_policy.upgrade() {
+            let path = ui.get_policy_path().to_string();
+            if path.trim().is_empty() {
+                ui.set_settings_text("请输入应用完整路径后设置采集策略。".into());
+            } else {
+                let result = db_for_policy
+                    .lock()
+                    .expect("database mutex poisoned")
+                    .set_policy(path.trim(), mode.as_str());
+                match result {
+                    Ok(()) => ui.set_settings_text(
+                        format!("已设置 {} 的采集策略为 {}。", path.trim(), mode.as_str()).into(),
+                    ),
+                    Err(error) => ui.set_settings_text(format!("设置策略失败：{error}").into()),
+                }
+            }
+        }
+    });
+    ui.on_policy_detailed_clicked({
+        let set_policy = Arc::clone(&set_policy);
+        move || set_policy(CaptureMode::Detailed)
+    });
+    ui.on_policy_totals_clicked({
+        let set_policy = Arc::clone(&set_policy);
+        move || set_policy(CaptureMode::TotalsOnly)
+    });
+    ui.on_policy_excluded_clicked({
+        let set_policy = Arc::clone(&set_policy);
+        move || set_policy(CaptureMode::Excluded)
+    });
+    let startup_config = Arc::clone(&config_state);
+    let startup_ui = ui.as_weak();
+    let startup_exe = std::env::current_exe().ok();
+    ui.on_startup_clicked(move || {
+        let Some(exe) = startup_exe.as_ref() else {
+            return;
+        };
+        let mut config = startup_config.lock().expect("config mutex poisoned");
+        let next = !config.start_with_windows;
+        match config::startup::windows::set_enabled(exe, next) {
+            Ok(()) => {
+                config.start_with_windows = next;
+                if let Err(error) = config::save(&config) {
+                    tracing::error!(%error, "failed to save startup configuration");
+                }
+                if let Some(ui) = startup_ui.upgrade() {
+                    ui.set_startup_text(
+                        if next {
+                            "开机启动：已开启"
+                        } else {
+                            "开机启动：未开启"
+                        }
+                        .into(),
+                    );
+                    ui.set_settings_text("开机启动设置已更新。移动 EXE 后需要重新开启。".into());
+                }
+            }
+            Err(error) => {
+                if let Some(ui) = startup_ui.upgrade() {
+                    ui.set_settings_text(format!("开机启动设置失败：{error}").into());
+                }
+            }
+        }
+    });
+    let clear_pending = Arc::new(AtomicBool::new(false));
+    let clear_db = Arc::clone(&db);
+    let clear_ui = ui.as_weak();
+    let clear_sort = Arc::clone(&sort_state);
+    let clear_pending_for_ui = Arc::clone(&clear_pending);
+    ui.on_clear_data_clicked(move || {
+        let Some(ui) = clear_ui.upgrade() else {
+            return;
+        };
+        if !clear_pending_for_ui.swap(true, Ordering::Relaxed) {
+            ui.set_clear_button_text("再次点击确认清空".into());
+            ui.set_settings_text("清空操作不可撤销，请再次点击确认。".into());
+            return;
+        }
+        let result = clear_db
+            .lock()
+            .expect("database mutex poisoned")
+            .clear_all();
+        clear_pending_for_ui.store(false, Ordering::Relaxed);
+        ui.set_clear_button_text("清空统计数据".into());
+        match result {
+            Ok(()) => {
+                let date = ui.get_date_text().to_string();
+                if let Ok(database) = clear_db.lock() {
+                    let _ = refresh_overview(
+                        &ui,
+                        &database,
+                        &date,
+                        *clear_sort.lock().expect("ranking state poisoned"),
+                    );
+                }
+                ui.set_detail_text("请输入应用完整路径查询详情。".into());
+                ui.set_settings_text("统计数据已清空。".into());
+            }
+            Err(error) => ui.set_settings_text(format!("清空失败：{error}").into()),
+        }
+    });
+    let pause_config = Arc::clone(&config_state);
     ui.on_pause_clicked(move || {
         let value = !enabled_for_ui.load(Ordering::Relaxed);
         enabled_for_ui.store(value, Ordering::Relaxed);
+        if let Ok(mut config) = pause_config.lock() {
+            config.capture_enabled = value;
+            if let Err(error) = config::save(&config) {
+                tracing::error!(%error, "failed to save capture state");
+            }
+        }
         if let Some(ui) = ui_for_state.upgrade() {
             ui.set_status_text(
                 if value {
@@ -229,6 +509,7 @@ fn main() -> anyhow::Result<()> {
     let tray_ui = ui.as_weak();
     let tray_db = Arc::clone(&db);
     let tray_shutdown = shutdown_tx;
+    let tray_config = Arc::clone(&config_state);
     let tray_timer = Timer::default();
     tray_timer.start(TimerMode::Repeated, Duration::from_millis(250), move || {
         let Some(command) = tray::take_request() else {
@@ -243,6 +524,12 @@ fn main() -> anyhow::Result<()> {
             tray::Command::TogglePause => {
                 let value = !tray_enabled.load(Ordering::Relaxed);
                 tray_enabled.store(value, Ordering::Relaxed);
+                if let Ok(mut config) = tray_config.lock() {
+                    config.capture_enabled = value;
+                    if let Err(error) = config::save(&config) {
+                        tracing::error!(%error, "failed to save capture state");
+                    }
+                }
                 if let Some(ui) = tray_ui.upgrade() {
                     ui.set_status_text(
                         if value {
