@@ -118,12 +118,11 @@ fn main() -> anyhow::Result<()> {
             if let Ok((k, m, w, a)) = db.lock().expect("database mutex poisoned").totals(&date)
                 && let Some(ui) = ui.upgrade()
             {
-                    ui.set_date_text(date.into());
-                    ui.set_keyboard_text(k.to_string().into());
-                    ui.set_mouse_text(m.to_string().into());
-                    ui.set_wheel_text(w.to_string().into());
-                    ui.set_app_text(a.to_string().into());
-                }
+                ui.set_date_text(date.into());
+                ui.set_keyboard_text(k.to_string().into());
+                ui.set_mouse_text(m.to_string().into());
+                ui.set_wheel_text(w.to_string().into());
+                ui.set_app_text(a.to_string().into());
             }
         }
     });
@@ -137,12 +136,11 @@ fn main() -> anyhow::Result<()> {
             if let Ok((k, m, w, a)) = db.lock().expect("database mutex poisoned").totals(&date)
                 && let Some(ui) = ui.upgrade()
             {
-                    ui.set_date_text(date.into());
-                    ui.set_keyboard_text(k.to_string().into());
-                    ui.set_mouse_text(m.to_string().into());
-                    ui.set_wheel_text(w.to_string().into());
-                    ui.set_app_text(a.to_string().into());
-                }
+                ui.set_date_text(date.into());
+                ui.set_keyboard_text(k.to_string().into());
+                ui.set_mouse_text(m.to_string().into());
+                ui.set_wheel_text(w.to_string().into());
+                ui.set_app_text(a.to_string().into());
             }
         }
     });
