@@ -32,3 +32,14 @@ cargo build --release --locked
 系统托盘右键菜单、完整应用策略编辑页面、键盘热力图、开机启动配置、文件选择式 CSV 导出，以及 Windows 10/11 长时间资源占用测试仍需补齐。当前构建和单元测试已通过，实机输入覆盖测试尚未完成。
 
 
+
+## 输入采集诊断
+
+启动后控制台应出现类似日志：
+
+```text
+INFO kb_count::collector::raw_input: Raw Input mouse and low-level keyboard collector started
+INFO kb_count: portable data directory initialized data_dir=...
+```
+
+如果只看到 `fontdb: Failed to load ... mstmc.ttf`，这是系统字体扫描警告，不是输入采集错误。请确认运行的是最新 `target/release/kb_count.exe`，并检查日志中的 `data_dir` 与 `stats.db` 是否在同一目录。统计默认每 5 秒批量写入数据库。
