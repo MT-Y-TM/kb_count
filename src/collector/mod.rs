@@ -126,11 +126,7 @@ mod raw_input {
                 let pressed = PRESSED_KEYS.get_or_init(|| Mutex::new(HashSet::new()));
                 let mut pressed = pressed.lock().expect("keyboard state poisoned");
                 let physically_down = GetAsyncKeyState(data.vkCode as i32) < 0;
-                if pressed.contains(&key_id) && physically_down {
-                    return CallNextHookEx(None, code, wparam, lparam);
-                }
-                pressed.remove(&key_id);
-                if !pressed.insert(key_id) {
+                if !should_count_keydown(&mut pressed, key_id, physically_down) {
                     return CallNextHookEx(None, code, wparam, lparam);
                 }
                 drop(pressed);
@@ -327,6 +323,18 @@ mod raw_input {
         i64::from(units)
     }
 
+    fn should_count_keydown(
+        pressed: &mut HashSet<u32>,
+        key_id: u32,
+        physically_down: bool,
+    ) -> bool {
+        if pressed.contains(&key_id) && physically_down {
+            return false;
+        }
+        pressed.remove(&key_id);
+        pressed.insert(key_id)
+    }
+
     #[allow(unsafe_op_in_unsafe_fn)]
     unsafe fn handle_input(_hwnd: HWND, lparam: LPARAM) {
         let mut size = 0u32;
@@ -429,6 +437,8 @@ mod raw_input {
     #[cfg(test)]
     mod tests {
         use super::normalize_delta;
+        use super::should_count_keydown;
+        use std::collections::HashSet;
 
         #[test]
         fn high_precision_wheel_accumulates_until_one_detent() {
@@ -439,6 +449,15 @@ mod raw_input {
             assert_eq!(normalize_delta(&mut remainder, 30), 1);
             assert_eq!(remainder, 0);
             assert_eq!(normalize_delta(&mut remainder, -240), -2);
+        }
+
+        #[test]
+        fn repeated_keydown_is_filtered_until_keyup() {
+            let mut pressed = HashSet::new();
+            assert!(should_count_keydown(&mut pressed, 42, true));
+            assert!(!should_count_keydown(&mut pressed, 42, true));
+            pressed.remove(&42);
+            assert!(should_count_keydown(&mut pressed, 42, true));
         }
     }
 }
