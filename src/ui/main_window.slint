@@ -1,4 +1,4 @@
-import { Button, LineEdit } from "std-widgets.slint";
+import { Button, LineEdit, ScrollView } from "std-widgets.slint";
 component MetricCard inherits Rectangle {
     in property <string> label;
     in property <string> value;
@@ -87,7 +87,9 @@ export component MainWindow inherits Window {
     width: 720px;
     height: 760px;
     background: dark_mode ? #111827 : #f5f6f8;
-    VerticalLayout {
+    ScrollView {
+        viewport-height: max(self.visible-height, content.preferred-height);
+        content := VerticalLayout {
         padding: 24px;
         spacing: 16px;
         Text { text: "kb_count"; font-size: 28px; color: dark_mode ? white : #17202a; }
@@ -124,7 +126,8 @@ export component MainWindow inherits Window {
         HorizontalLayout { spacing: 8px; LineEdit { text <=> root.policy_path; placeholder-text: "要设置策略的应用完整路径"; } Button { text: "详细"; clicked => { root.policy_detailed_clicked(); } } Button { text: "仅总量"; clicked => { root.policy_totals_clicked(); } } Button { text: "排除"; clicked => { root.policy_excluded_clicked(); } } }
         Text { text: settings_text; color: #566573; wrap: word-wrap; }
         HorizontalLayout { spacing: 8px; Button { text: startup_text; clicked => { root.startup_clicked(); } } Button { text: theme_text; clicked => { root.theme_clicked(); } } Button { text: clear_button_text; clicked => { root.clear_data_clicked(); } } }
-        Text { text: "数据保存在可执行文件所在目录。"; color: #7b7d7d; }
+            Text { text: "数据保存在可执行文件所在目录。"; color: #7b7d7d; }
+        }
     }
 }
 
