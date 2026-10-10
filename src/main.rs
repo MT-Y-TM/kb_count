@@ -35,6 +35,11 @@ enum RankingSort {
     Total,
 }
 
+enum WriterCommand {
+    Clear(mpsc::SyncSender<bool>),
+    Shutdown(mpsc::SyncSender<bool>),
+}
+
 fn heat_count(rows: &[storage::database::KeyTotal], scan_code: &str) -> i32 {
     heat_count_ext(rows, scan_code, false)
 }
@@ -452,8 +457,7 @@ fn main() -> anyhow::Result<()> {
     let db_writer = Arc::clone(&db);
     let writer_enabled = Arc::clone(&enabled);
     let flush_seconds = cfg.flush_interval_seconds.max(1);
-    let (shutdown_tx, shutdown_rx) = mpsc::sync_channel(1);
-    let (shutdown_ack_tx, shutdown_ack_rx) = mpsc::sync_channel(1);
+    let (writer_command_tx, writer_command_rx) = mpsc::sync_channel(1);
     thread::Builder::new()
         .name("kb-stats-writer".into())
         .spawn(move || {
@@ -495,11 +499,23 @@ fn main() -> anyhow::Result<()> {
                 }
             };
             loop {
-                match shutdown_rx.recv_timeout(Duration::from_secs(flush_seconds)) {
-                    Ok(()) => {
+                match writer_command_rx.recv_timeout(Duration::from_secs(flush_seconds)) {
+                    Ok(WriterCommand::Shutdown(ack)) => {
                         flush(&events, &db_writer, &writer_enabled, &mut pending);
-                        let _ = shutdown_ack_tx.send(());
+                        let _ = ack.send(pending.is_empty());
                         break;
+                    }
+                    Ok(WriterCommand::Clear(ack)) => {
+                        while events.try_recv().is_ok() {}
+                        pending.clear();
+                        let result = db_writer
+                            .lock()
+                            .map_err(|_| "database mutex poisoned")
+                            .and_then(|mut database| database.clear_all().map_err(|_| "clear failed"));
+                        if result.is_err() {
+                            tracing::error!("failed to clear statistics database");
+                        }
+                        let _ = ack.send(result.is_ok());
                     }
                     Err(mpsc::RecvTimeoutError::Timeout) => {
                         flush(&events, &db_writer, &writer_enabled, &mut pending);
@@ -806,6 +822,7 @@ fn main() -> anyhow::Result<()> {
     let clear_ui = ui.as_weak();
     let clear_sort = Arc::clone(&sort_state);
     let clear_pending_for_ui = Arc::clone(&clear_pending);
+    let clear_command = writer_command_tx.clone();
     ui.on_clear_data_clicked(move || {
         let Some(ui) = clear_ui.upgrade() else {
             return;
@@ -815,10 +832,21 @@ fn main() -> anyhow::Result<()> {
             ui.set_settings_text("清空操作不可撤销，请再次点击确认。".into());
             return;
         }
-        let result = clear_db
-            .lock()
-            .expect("database mutex poisoned")
-            .clear_all();
+        let (ack_tx, ack_rx) = mpsc::sync_channel(1);
+        let result = if clear_command.send(WriterCommand::Clear(ack_tx)).is_ok() {
+            ack_rx
+                .recv_timeout(Duration::from_secs(2))
+                .map(|success| {
+                    if success {
+                        Ok(())
+                    } else {
+                        Err(anyhow::anyhow!("统计线程清空数据库失败"))
+                    }
+                })
+                .unwrap_or_else(|_| Err(anyhow::anyhow!("统计线程未响应清空请求")))
+        } else {
+            Err(anyhow::anyhow!("统计线程已停止"))
+        };
         clear_pending_for_ui.store(false, Ordering::Relaxed);
         ui.set_clear_button_text("清空统计数据".into());
         match result {
@@ -899,7 +927,7 @@ fn main() -> anyhow::Result<()> {
     let tray_ui = ui.as_weak();
     let tray_db = Arc::clone(&db);
     let tray_sort = Arc::clone(&sort_state);
-    let tray_shutdown = shutdown_tx;
+    let tray_shutdown = writer_command_tx;
     let tray_config = Arc::clone(&config_state);
     let tray_timer = Timer::default();
     tray_timer.start(TimerMode::Repeated, Duration::from_millis(250), move || {
@@ -944,8 +972,9 @@ fn main() -> anyhow::Result<()> {
                 }
             }
             tray::Command::Exit => {
-                let _ = tray_shutdown.try_send(());
-                let _ = shutdown_ack_rx.recv_timeout(Duration::from_secs(2));
+                let (ack_tx, ack_rx) = mpsc::sync_channel(1);
+                let _ = tray_shutdown.try_send(WriterCommand::Shutdown(ack_tx));
+                let _ = ack_rx.recv_timeout(Duration::from_secs(2));
                 let _ = tray_db
                     .lock()
                     .expect("database mutex poisoned")
