@@ -46,7 +46,7 @@ mod raw_input {
     static SENDER: OnceLock<SyncSender<InputEvent>> = OnceLock::new();
     static PROCESS_CACHE: OnceLock<Mutex<HashMap<u32, ProcessCacheEntry>>> = OnceLock::new();
     static PRESSED_KEYS: OnceLock<Mutex<HashSet<u32>>> = OnceLock::new();
-    static WHEEL_REMAINDER: OnceLock<Mutex<(i32, i32)>> = OnceLock::new();
+    static WHEEL_REMAINDER: OnceLock<Mutex<HashMap<String, (i32, i32)>>> = OnceLock::new();
     static DROPPED_EVENTS: AtomicU64 = AtomicU64::new(0);
 
     pub fn run(tx: SyncSender<InputEvent>) {
@@ -264,7 +264,7 @@ mod raw_input {
             pressed.lock().expect("keyboard state poisoned").clear();
         }
         if let Some(remainder) = WHEEL_REMAINDER.get() {
-            *remainder.lock().expect("wheel state poisoned") = (0, 0);
+            remainder.lock().expect("wheel state poisoned").clear();
         }
     }
     #[allow(clippy::too_many_arguments)]
@@ -304,15 +304,25 @@ mod raw_input {
         }
     }
 
-    fn normalize_wheel(horizontal: bool, delta: i32) -> i64 {
-        let remainder = WHEEL_REMAINDER.get_or_init(|| Mutex::new((0, 0)));
-        let mut remainder = remainder.lock().expect("wheel state poisoned");
-        let value = if horizontal {
-            &mut remainder.1
+    fn normalize_wheel(app_path: &str, horizontal: bool, delta: i32) -> i64 {
+        let remainder = WHEEL_REMAINDER.get_or_init(|| Mutex::new(HashMap::new()));
+        let mut remainders = remainder.lock().expect("wheel state poisoned");
+        if !remainders.contains_key(app_path)
+            && remainders.len() >= 256
+            && let Some(oldest) = remainders.keys().next().cloned()
+        {
+            remainders.remove(&oldest);
+        }
+        let value = remainders.entry(app_path.to_string()).or_default();
+        let units = if horizontal {
+            normalize_delta(&mut value.1, delta)
         } else {
-            &mut remainder.0
+            normalize_delta(&mut value.0, delta)
         };
-        normalize_delta(value, delta)
+        if value.0 == 0 && value.1 == 0 {
+            remainders.remove(app_path);
+        }
+        units
     }
 
     fn normalize_delta(remainder: &mut i32, delta: i32) -> i64 {
@@ -415,7 +425,7 @@ mod raw_input {
         ));
         for (flag, horizontal, code) in [(0x0100, false, "wheel"), (0x0200, true, "hwheel")] {
             if flags & flag != 0 {
-                let units = normalize_wheel(horizontal, delta);
+                let units = normalize_wheel(&app_path, horizontal, delta);
                 if units != 0 {
                     emit_event(
                         date.clone(),
@@ -436,6 +446,8 @@ mod raw_input {
     #[cfg(test)]
     mod tests {
         use super::normalize_delta;
+        use super::normalize_wheel;
+        use super::reset_input_state;
         use super::should_count_keydown;
         use std::collections::HashSet;
 
@@ -448,6 +460,15 @@ mod raw_input {
             assert_eq!(normalize_delta(&mut remainder, 30), 1);
             assert_eq!(remainder, 0);
             assert_eq!(normalize_delta(&mut remainder, -240), -2);
+        }
+
+        #[test]
+        fn wheel_remainders_are_isolated_by_application() {
+            reset_input_state();
+            assert_eq!(normalize_wheel("a.exe", false, 30), 0);
+            assert_eq!(normalize_wheel("b.exe", false, 90), 0);
+            assert_eq!(normalize_wheel("a.exe", false, 90), 1);
+            reset_input_state();
         }
 
         #[test]
