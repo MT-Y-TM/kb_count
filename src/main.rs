@@ -11,6 +11,7 @@ use slint::{Timer, TimerMode};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
+    mpsc,
 };
 use std::thread;
 use std::time::Duration;
@@ -47,27 +48,39 @@ fn main() -> anyhow::Result<()> {
     let db_writer = Arc::clone(&db);
     let writer_enabled = Arc::clone(&enabled);
     let flush_seconds = cfg.flush_interval_seconds.max(1);
+    let (shutdown_tx, shutdown_rx) = mpsc::sync_channel(1);
+    let (shutdown_ack_tx, shutdown_ack_rx) = mpsc::sync_channel(1);
     thread::Builder::new()
         .name("kb-stats-writer".into())
         .spawn(move || {
-            loop {
-                thread::sleep(Duration::from_secs(flush_seconds));
+            let flush = |events: &mpsc::Receiver<stats::event::InputEvent>,
+                         db: &Arc<Mutex<storage::database::Database>>,
+                         enabled: &AtomicBool| {
                 let mut aggregator = Aggregator::default();
                 while let Ok(event) = events.try_recv() {
                     let mode = CaptureMode::for_application(&event.app_path);
                     aggregator.record(event, mode);
                 }
-                if !writer_enabled.load(Ordering::Relaxed) {
-                    continue;
+                if !enabled.load(Ordering::Relaxed) {
+                    return;
                 }
                 for event in aggregator.drain() {
-                    if let Err(error) = db_writer
-                        .lock()
-                        .expect("database mutex poisoned")
-                        .record(&event)
-                    {
+                    if let Err(error) = db.lock().expect("database mutex poisoned").record(&event) {
                         tracing::error!(%error, "failed to persist aggregate");
                     }
+                }
+            };
+            loop {
+                match shutdown_rx.recv_timeout(Duration::from_secs(flush_seconds)) {
+                    Ok(()) => {
+                        flush(&events, &db_writer, &writer_enabled);
+                        let _ = shutdown_ack_tx.send(());
+                        break;
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        flush(&events, &db_writer, &writer_enabled);
+                    }
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 }
             }
         })?;
@@ -215,6 +228,7 @@ fn main() -> anyhow::Result<()> {
     let tray_enabled = Arc::clone(&enabled);
     let tray_ui = ui.as_weak();
     let tray_db = Arc::clone(&db);
+    let tray_shutdown = shutdown_tx;
     let tray_timer = Timer::default();
     tray_timer.start(TimerMode::Repeated, Duration::from_millis(250), move || {
         let Some(command) = tray::take_request() else {
@@ -241,6 +255,8 @@ fn main() -> anyhow::Result<()> {
                 }
             }
             tray::Command::Exit => {
+                let _ = tray_shutdown.try_send(());
+                let _ = shutdown_ack_rx.recv_timeout(Duration::from_secs(2));
                 let _ = tray_db
                     .lock()
                     .expect("database mutex poisoned")
