@@ -47,6 +47,7 @@ mod raw_input {
         unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
     }
 
+    #[allow(unsafe_op_in_unsafe_fn)]
     unsafe fn foreground_process() -> (String, String) {
         let hwnd = GetForegroundWindow();
         let mut pid = 0u32;
@@ -80,6 +81,7 @@ mod raw_input {
 
 #[cfg(not(windows))]
 mod raw_input { use super::*; pub fn run(_tx: Sender<InputEvent>) { thread::park(); } }
+
 
 
 
