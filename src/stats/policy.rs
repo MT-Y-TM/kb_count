@@ -66,7 +66,7 @@ pub fn normalize_app_path(path: &str) -> String {
     if value.is_empty() || value.eq_ignore_ascii_case("unknown") {
         return "Unknown".into();
     }
-    value.to_ascii_lowercase()
+    value.to_lowercase()
 }
 
 #[cfg(test)]
