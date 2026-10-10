@@ -188,6 +188,12 @@ impl Database {
         Ok(rows.collect::<rusqlite::Result<HashMap<_, _>>>()?)
     }
 
+    pub fn policy_rows(&self) -> Result<Vec<(String, CaptureMode)>> {
+        let mut rows = self.policies()?.into_iter().collect::<Vec<_>>();
+        rows.sort_by(|left, right| left.0.cmp(&right.0));
+        Ok(rows)
+    }
+
     pub fn app_detail(&self, date: &str, path: &str) -> Result<Option<AppDetail>> {
         let path = normalize_app_path(path);
         let row = self.conn.query_row(

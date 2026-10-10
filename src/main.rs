@@ -105,6 +105,20 @@ fn display_input_code(code: &str) -> String {
     name.to_string()
 }
 
+fn policy_summary(database: &storage::database::Database) -> String {
+    match database.policy_rows() {
+        Ok(rows) if rows.is_empty() => {
+            "当前没有手动应用策略（浏览器和密码管理器使用默认策略）".to_string()
+        }
+        Ok(rows) => rows
+            .into_iter()
+            .map(|(path, mode)| format!("{}: {}", path, mode.as_str()))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Err(error) => format!("无法读取应用策略：{error}"),
+    }
+}
+
 #[cfg(windows)]
 fn choose_csv_path(default_name: &str) -> Option<PathBuf> {
     use windows::Win32::UI::Controls::Dialogs::{
@@ -516,16 +530,18 @@ fn main() -> anyhow::Result<()> {
         .ok()
         .and_then(|exe| config::startup::windows::is_configured(&exe).ok())
         .unwrap_or(false);
+    let initial_policy_summary = policy_summary(&db.lock().expect("database mutex poisoned"));
     ui.set_settings_text(
         format!(
-            "数据目录: {}\n数据库: stats.db (WAL)\n版本: {}{}",
+            "数据目录: {}\n数据库: stats.db (WAL)\n版本: {}{}\n当前应用策略:\n{}",
             dir.display(),
             env!("CARGO_PKG_VERSION"),
             if cfg.start_with_windows && !startup_matches {
                 "\n启动项路径与当前 EXE 不一致，请重新启用。"
             } else {
                 ""
-            }
+            },
+            initial_policy_summary
         )
         .into(),
     );
@@ -691,13 +707,17 @@ fn main() -> anyhow::Result<()> {
             if path.trim().is_empty() {
                 ui.set_settings_text("请输入应用完整路径后设置采集策略。".into());
             } else {
-                let result = db_for_policy
-                    .lock()
-                    .expect("database mutex poisoned")
-                    .set_policy(path.trim(), mode.as_str());
+                let database = db_for_policy.lock().expect("database mutex poisoned");
+                let result = database.set_policy(path.trim(), mode.as_str());
                 match result {
                     Ok(()) => ui.set_settings_text(
-                        format!("已设置 {} 的采集策略为 {}。", path.trim(), mode.as_str()).into(),
+                        format!(
+                            "已设置 {} 的采集策略为 {}。\n当前应用策略:\n{}",
+                            path.trim(),
+                            mode.as_str(),
+                            policy_summary(&database)
+                        )
+                        .into(),
                     ),
                     Err(error) => ui.set_settings_text(format!("设置策略失败：{error}").into()),
                 }
