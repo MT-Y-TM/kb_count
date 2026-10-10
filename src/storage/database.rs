@@ -90,3 +90,26 @@ impl Database {
         Ok(())
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn totals_only_event_updates_totals_without_key_rows() {
+        let mut db = Database::open(Path::new(":memory:")).expect("database");
+        db.record(&InputEvent {
+            local_date: "2026-10-11".into(),
+            app_name: "browser.exe".into(),
+            app_path: "browser.exe".into(),
+            input_type: "keyboard".into(),
+            code: "total".into(),
+            count: 3,
+            keyboard_count: 3,
+            mouse_count: 0,
+            wheel_units: 0,
+            detailed: false,
+        })
+        .expect("record");
+        assert_eq!(db.totals("2026-10-11").unwrap().0, 3);
+        assert!(db.key_ranking("2026-10-11", None).unwrap().is_empty());
+    }
+}
