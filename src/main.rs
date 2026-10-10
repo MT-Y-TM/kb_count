@@ -9,7 +9,11 @@ use std::thread;
 use std::time::Duration;
 use crate::stats::aggregator::Aggregator;
 use crate::stats::policy::CaptureMode;
+#[cfg(windows)] use windows::core::w;
+#[cfg(windows)] use windows::Win32::System::Threading::CreateMutexW;
+#[cfg(windows)] use windows::Win32::Foundation::GetLastError;
 fn main() -> anyhow::Result<()> {
+    #[cfg(windows)] { unsafe { let _instance_mutex = CreateMutexW(None, false, w!("Global\\kb_count_single_instance"))?; if GetLastError().0 == 183 { return Ok(()); } let _ = _instance_mutex; } }
     tracing_subscriber::fmt::init();
     let cfg = config::load_or_create()?;
     let dir = config::app_dir()?;
@@ -41,3 +45,5 @@ fn main() -> anyhow::Result<()> {
     ui.run()?;
     Ok(())
 }
+
+
