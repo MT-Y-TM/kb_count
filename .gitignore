@@ -3,3 +3,4 @@ stats.db*
 config.toml
 logs/
 target/
+smoke_test/
