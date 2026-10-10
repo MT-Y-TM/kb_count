@@ -57,7 +57,7 @@ INFO kb_count: portable data directory initialized data_dir=...
 
 ## 本机 Release 资源实测
 
-测试环境为 Windows 11 专业工作站版 10.0.26200，后台隐藏运行 10 秒、无输入，使用 PowerShell `Get-Process` 每秒采样：私有内存约 51.29–52.91 MiB，工作集约 113.67–115.30 MiB，平均 CPU 约 0.55%；打开窗口后私有内存约 47.10–51.47 MiB，工作集约 106.54–113.79 MiB，平均 CPU 约 0.61%。当前 Release EXE 约 11.32 MiB。该结果只代表本机短时测试，不是所有 Windows 10/11 设备的性能承诺。
+测试环境为 Windows 11 专业工作站版 10.0.26200，后台隐藏运行 10 秒、无输入，使用 PowerShell `Get-Process` 每秒采样：私有内存约 32.21–32.34 MiB，工作集约 82.12–82.25 MiB，平均 CPU 约 0.04%；打开统计窗口后短时采样约 32.01–32.14 MiB、81.87–81.99 MiB，平均 CPU 约 0.07%。当前 Release EXE 约 11.32 MiB。该结果只代表本机短时测试，不是所有 Windows 10/11 设备的性能承诺。
 
 
 
