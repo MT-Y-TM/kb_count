@@ -18,7 +18,7 @@ mod raw_input {
     use std::collections::HashMap;
     use std::ffi::c_void;
     use std::sync::{Mutex, OnceLock};
-    use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, LRESULT, WPARAM};
+    use windows::Win32::Foundation::{CloseHandle, GetLastError, HWND, LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::System::Threading::{
         OpenProcess, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -49,6 +49,7 @@ mod raw_input {
                 ..Default::default()
             };
             if RegisterClassW(&class) == 0 {
+                tracing::error!(error = ?windows::Win32::Foundation::GetLastError(), "RegisterClassW failed");
                 return;
             }
             let hwnd = match CreateWindowExW(
@@ -66,7 +67,10 @@ mod raw_input {
                 None,
             ) {
                 Ok(value) => value,
-                Err(_) => return,
+                Err(error) => {
+                    tracing::error!(%error, "CreateWindowExW failed");
+                    return;
+                }
             };
             if hwnd.0.is_null() {
                 return;
@@ -85,11 +89,13 @@ mod raw_input {
                     hwndTarget: hwnd,
                 },
             ];
-            if RegisterRawInputDevices(&devices, std::mem::size_of::<RAWINPUTDEVICE>() as u32)
-                .is_err()
+            if let Err(error) =
+                RegisterRawInputDevices(&devices, std::mem::size_of::<RAWINPUTDEVICE>() as u32)
             {
+                tracing::error!(%error, "RegisterRawInputDevices failed");
                 return;
             }
+            tracing::info!("Raw Input keyboard/mouse collector started");
             let mut msg = MSG::default();
             while GetMessageW(&mut msg, None, 0, 0).into() {
                 let _ = TranslateMessage(&msg);
@@ -172,18 +178,18 @@ mod raw_input {
         {
             return;
         }
-        let mut bytes = vec![0u8; size as usize];
+        let mut aligned = vec![0u64; (size as usize).div_ceil(std::mem::size_of::<u64>())];
         if GetRawInputData(
             windows::Win32::UI::Input::HRAWINPUT(lparam.0 as _),
             RID_INPUT,
-            Some(bytes.as_mut_ptr() as *mut c_void),
+            Some(aligned.as_mut_ptr() as *mut c_void),
             &mut size,
             std::mem::size_of::<RAWINPUTHEADER>() as u32,
         ) == u32::MAX
         {
             return;
         }
-        let raw = &*(bytes.as_ptr() as *const RAWINPUT);
+        let raw = &*(aligned.as_ptr() as *const RAWINPUT);
         let date = Local::now().format("%Y-%m-%d").to_string();
         let (app_name, app_path) = foreground_process();
         let (kind, code, count, key, mouse, wheel) = match raw.header.dwType {
