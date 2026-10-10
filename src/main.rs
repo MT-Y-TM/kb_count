@@ -12,7 +12,7 @@ use slint::{CloseRequestResponse, SharedString, Timer, TimerMode};
 use std::path::PathBuf;
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     mpsc,
 };
 use std::thread;
@@ -456,6 +456,8 @@ fn main() -> anyhow::Result<()> {
     let events = collector::start();
     let db_writer = Arc::clone(&db);
     let writer_enabled = Arc::clone(&enabled);
+    let data_generation = Arc::new(AtomicU64::new(0));
+    let writer_generation = Arc::clone(&data_generation);
     let flush_seconds = cfg.flush_interval_seconds.max(1);
     let (writer_command_tx, writer_command_rx) = mpsc::sync_channel(1);
     thread::Builder::new()
@@ -496,6 +498,7 @@ fn main() -> anyhow::Result<()> {
                     }
                 } else {
                     pending.clear();
+                    writer_generation.fetch_add(1, Ordering::Release);
                 }
             };
             loop {
@@ -514,6 +517,9 @@ fn main() -> anyhow::Result<()> {
                             .and_then(|mut database| database.clear_all().map_err(|_| "clear failed"));
                         if result.is_err() {
                             tracing::error!("failed to clear statistics database");
+                        }
+                        if result.is_ok() {
+                            writer_generation.fetch_add(1, Ordering::Release);
                         }
                         let _ = ack.send(result.is_ok());
                     }
@@ -986,7 +992,9 @@ fn main() -> anyhow::Result<()> {
     let refresh_timer_ui = ui.as_weak();
     let refresh_timer_db = Arc::clone(&db);
     let refresh_timer_sort = Arc::clone(&sort_state);
+    let refresh_timer_generation = Arc::clone(&data_generation);
     let refresh_timer = Timer::default();
+    let mut last_generation = refresh_timer_generation.load(Ordering::Acquire);
     refresh_timer.start(TimerMode::Repeated, Duration::from_secs(5), move || {
         let Some(ui) = refresh_timer_ui.upgrade() else {
             return;
@@ -994,14 +1002,21 @@ fn main() -> anyhow::Result<()> {
         if !ui.window().is_visible() {
             return;
         }
+        let generation = refresh_timer_generation.load(Ordering::Acquire);
+        if generation == last_generation {
+            return;
+        }
         let date = ui.get_date_text().to_string();
-        if let Ok(database) = refresh_timer_db.try_lock() {
-            let _ = refresh_overview(
+        if let Ok(database) = refresh_timer_db.try_lock()
+            && refresh_overview(
                 &ui,
                 &database,
                 &date,
                 *refresh_timer_sort.lock().expect("ranking state poisoned"),
-            );
+            )
+            .is_ok()
+        {
+            last_generation = generation;
         }
     });
     ui.hide()?;
