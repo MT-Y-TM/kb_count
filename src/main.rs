@@ -43,7 +43,9 @@ fn main() -> anyhow::Result<()> {
     ui.set_wheel_text(wheel.to_string().into());
     ui.set_app_text(apps.to_string().into());
     ui.set_status_text(if cfg.capture_enabled { "统计运行中" } else { "统计已暂停" }.into());
+    let ranking = db.lock().unwrap().app_totals(&date)?.into_iter().take(8).enumerate().map(|(index, row)| format!("{}. {}  键盘:{} 鼠标:{} 滚轮:{}", index + 1, row.app_name, row.keyboard, row.mouse, row.wheel)).collect::<Vec<_>>().join("\\n");
     ui.set_export_text("未导出".into());
+    ui.set_ranking_text(ranking.into());
     let enabled_for_ui = Arc::clone(&enabled);
     let db_for_export = Arc::clone(&db);
     let dir_for_export = dir.clone();
@@ -57,5 +59,6 @@ fn main() -> anyhow::Result<()> {
     ui.run()?;
     Ok(())
 }
+
 
 
