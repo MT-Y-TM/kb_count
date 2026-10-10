@@ -4,7 +4,7 @@ use std::collections::HashMap;
 #[derive(Default)]
 #[allow(dead_code)]
 pub struct Aggregator {
-    counts: HashMap<(String, String, String, String), i64>,
+    counts: HashMap<(String, String, String, String), (i64, bool)>,
 }
 #[allow(dead_code)]
 impl Aggregator {
@@ -22,12 +22,14 @@ impl Aggregator {
             event.input_type.clone(),
             event.code.clone(),
         );
-        *self.counts.entry(key).or_default() += event.count;
+        let entry = self.counts.entry(key).or_insert((0, event.detailed));
+        entry.0 += event.count;
+        entry.1 &= event.detailed;
     }
     pub fn drain(&mut self) -> Vec<InputEvent> {
         self.counts
             .drain()
-            .map(|((date, path, kind, code), count)| {
+            .map(|((date, path, kind, code), (count, detailed))| {
                 let name = std::path::Path::new(&path)
                     .file_name()
                     .and_then(|x| x.to_str())
@@ -43,7 +45,7 @@ impl Aggregator {
                     keyboard_count: if kind == "keyboard" { count } else { 0 },
                     mouse_count: if kind == "mouse" { count } else { 0 },
                     wheel_units: if kind == "wheel" { count } else { 0 },
-                    detailed: true,
+                    detailed,
                 }
             })
             .collect()
