@@ -8,6 +8,7 @@ Windows 便携式键盘鼠标输入统计工具，Rust 2024 + Slint + windows-rs
 - SQLite WAL schema：应用、日输入明细、日汇总、应用策略，并在退出时执行 checkpoint。
 - Windows Raw Input 隐藏窗口接收鼠标事件，并使用低级键盘钩子接收物理键盘 KeyDown；两者均在采集线程消息循环中处理，键盘自动重复会被过滤。
 - 键盘 KeyDown、扫描码/扩展标识、鼠标按钮、滚轮 Delta 归一化。
+- `daily_input_counts.input_type` 统一使用 `keyboard` / `mouse`；滚轮通过 `wheel_up`、`wheel_down`、`hwheel_up`、`hwheel_down` 代码区分，旧版 `wheel` 行会在打开数据库时自动迁移。
 - 前台进程路径识别和 PID 缓存，无法识别时使用 Unknown。
 - 有界输入队列、内存聚合、5 秒批量写入、暂停/恢复。
 - Detailed / Totals Only / Excluded 隐私策略；浏览器默认 Totals Only，密码管理器默认 Excluded。
