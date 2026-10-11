@@ -477,7 +477,11 @@ fn run() -> anyhow::Result<()> {
         .init();
     let cfg = config::load_or_create()?;
     let dir = config::app_dir()?;
-    tracing::info!(data_dir = %dir.display(), "portable data directory initialized");
+    tracing::info!(
+        data_dir = %dir.display(),
+        capture_enabled = cfg.capture_enabled,
+        "portable data directory initialized"
+    );
     let config_state = Arc::new(Mutex::new(cfg.clone()));
     let db_path = dir.join("stats.db");
     let db = Arc::new(Mutex::new(

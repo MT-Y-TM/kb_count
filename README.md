@@ -60,7 +60,7 @@ Windows 10/11 长时间资源占用测试仍需补齐。当前构建、启动、
 
 ```text
 INFO kb_count::collector::raw_input: Raw Input mouse and low-level keyboard collector started
-INFO kb_count: portable data directory initialized data_dir=...
+INFO kb_count: portable data directory initialized data_dir=... capture_enabled=true
 INFO kb_count::collector::raw_input: first input event received input_type=mouse
 ```
 
