@@ -61,6 +61,7 @@ Windows 10/11 长时间资源占用测试仍需补齐。当前构建、启动、
 ```text
 INFO kb_count::collector::raw_input: Raw Input mouse and low-level keyboard collector started
 INFO kb_count: portable data directory initialized data_dir=...
+INFO kb_count::collector::raw_input: first input event received input_type=mouse
 ```
 
 最新版本默认过滤该 fontdb 字体扫描警告。请确认运行的是最新 `target/release/kb_count.exe`，并检查日志中的 `data_dir` 与 `stats.db` 是否在同一目录。统计默认每 5 秒批量写入数据库。
