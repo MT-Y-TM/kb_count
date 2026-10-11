@@ -26,7 +26,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     FindWindowW, SW_RESTORE, SetForegroundWindow, ShowWindow,
 };
 #[cfg(windows)]
-use windows::core::w;
+use windows::core::{PCWSTR, w};
 
 #[derive(Clone, Copy)]
 enum RankingSort {
@@ -425,7 +425,32 @@ fn refresh_detail(
     Ok(())
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() {
+    if let Err(error) = run() {
+        #[cfg(windows)]
+        show_startup_error(&error);
+        #[cfg(not(windows))]
+        eprintln!("kb_count 启动失败：{error:#}");
+    }
+}
+
+#[cfg(windows)]
+fn show_startup_error(error: &anyhow::Error) {
+    use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
+    let message = format!("kb_count 启动失败：{error:#}");
+    let mut text = message.encode_utf16().collect::<Vec<_>>();
+    text.push(0);
+    unsafe {
+        let _ = MessageBoxW(
+            None,
+            PCWSTR(text.as_ptr()),
+            w!("kb_count"),
+            MB_OK | MB_ICONERROR,
+        );
+    }
+}
+
+fn run() -> anyhow::Result<()> {
     #[cfg(windows)]
     let _instance_mutex = unsafe {
         let mutex = CreateMutexW(None, false, w!("Global\\kb_count_single_instance"))?;
