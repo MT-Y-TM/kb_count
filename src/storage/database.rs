@@ -1,7 +1,7 @@
 use crate::stats::event::InputEvent;
 use crate::stats::policy::{CaptureMode, normalize_app_path};
 use anyhow::{Result, bail};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::HashMap;
 use std::path::Path;
 #[allow(dead_code)]
@@ -91,12 +91,23 @@ impl Database {
                     .unwrap_or(&event.app_name)
                     .to_string()
             };
-            tx.execute("INSERT INTO applications(executable_name,executable_path,display_name,first_seen_at,last_seen_at) VALUES (?1,?2,?3,datetime('now'),datetime('now')) ON CONFLICT(executable_path) DO UPDATE SET last_seen_at=datetime('now')", params![app_name,app_path,app_name])?;
-            let id: i64 = tx.query_row(
-                "SELECT id FROM applications WHERE executable_path=?1",
-                [&app_path],
-                |r| r.get(0),
-            )?;
+            let id = tx
+                .query_row(
+                    "SELECT id FROM applications WHERE executable_path=?1 COLLATE NOCASE",
+                    [&app_path],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let id = if let Some(id) = id {
+                tx.execute(
+                    "UPDATE applications SET last_seen_at=datetime('now') WHERE id=?1",
+                    [id],
+                )?;
+                id
+            } else {
+                tx.execute("INSERT INTO applications(executable_name,executable_path,display_name,first_seen_at,last_seen_at) VALUES (?1,?2,?3,datetime('now'),datetime('now'))", params![app_name,app_path,app_name])?;
+                tx.last_insert_rowid()
+            };
             if event.detailed {
                 tx.execute("INSERT INTO daily_input_counts VALUES (?1,?2,?3,?4,?5) ON CONFLICT(local_date,app_id,input_type,input_code) DO UPDATE SET count=count+excluded.count",params![event.local_date,id,event.input_type,event.code,event.count])?;
             }
@@ -146,7 +157,7 @@ impl Database {
     ) -> Result<Vec<KeyTotal>> {
         if let Some(path) = app_path {
             let path = normalize_app_path(path);
-            let mut stmt=self.conn.prepare("SELECT c.input_code,SUM(c.count) FROM daily_input_counts c JOIN applications a ON a.id=c.app_id WHERE c.local_date=?1 AND c.input_type=?3 AND a.executable_path=?2 GROUP BY c.input_code ORDER BY SUM(c.count) DESC")?;
+            let mut stmt=self.conn.prepare("SELECT c.input_code,SUM(c.count) FROM daily_input_counts c JOIN applications a ON a.id=c.app_id WHERE c.local_date=?1 AND c.input_type=?3 AND a.executable_path=?2 COLLATE NOCASE GROUP BY c.input_code ORDER BY SUM(c.count) DESC")?;
             let rows = stmt.query_map(params![date, path, input_type], |r| {
                 Ok(KeyTotal {
                     code: r.get(0)?,
@@ -172,8 +183,21 @@ impl Database {
             .file_name()
             .and_then(|value| value.to_str())
             .unwrap_or("Unknown");
-        self.conn.execute("INSERT INTO applications(executable_name,executable_path,display_name,first_seen_at,last_seen_at) VALUES (?1,?2,?1,datetime('now'),datetime('now')) ON CONFLICT(executable_path) DO NOTHING", params![name, path])?;
-        self.conn.execute("INSERT INTO app_policies(app_id,capture_mode) SELECT id,?2 FROM applications WHERE executable_path=?1 ON CONFLICT(app_id) DO UPDATE SET capture_mode=excluded.capture_mode",params![path,mode])?;
+        let id: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT id FROM applications WHERE executable_path=?1 COLLATE NOCASE",
+                [&path],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let id = if let Some(id) = id {
+            id
+        } else {
+            self.conn.execute("INSERT INTO applications(executable_name,executable_path,display_name,first_seen_at,last_seen_at) VALUES (?1,?2,?1,datetime('now'),datetime('now'))", params![name, path])?;
+            self.conn.last_insert_rowid()
+        };
+        self.conn.execute("INSERT INTO app_policies(app_id,capture_mode) VALUES (?1,?2) ON CONFLICT(app_id) DO UPDATE SET capture_mode=excluded.capture_mode", params![id, mode])?;
         Ok(())
     }
 
@@ -181,7 +205,7 @@ impl Database {
         let mut stmt = self.conn.prepare("SELECT a.executable_path,p.capture_mode FROM app_policies p JOIN applications a ON a.id=p.app_id")?;
         let rows = stmt.query_map([], |row| {
             Ok((
-                row.get::<_, String>(0)?,
+                normalize_app_path(&row.get::<_, String>(0)?),
                 CaptureMode::parse(&row.get::<_, String>(1)?),
             ))
         })?;
@@ -197,7 +221,7 @@ impl Database {
     pub fn app_detail(&self, date: &str, path: &str) -> Result<Option<AppDetail>> {
         let path = normalize_app_path(path);
         let row = self.conn.query_row(
-            "SELECT a.executable_name,a.executable_path,COALESCE(t.keyboard_count,0),COALESCE(t.mouse_click_count,0),COALESCE(t.wheel_units,0),COALESCE(p.capture_mode,'') FROM applications a LEFT JOIN daily_app_totals t ON t.app_id=a.id AND t.local_date=?1 LEFT JOIN app_policies p ON p.app_id=a.id WHERE a.executable_path=?2",
+            "SELECT a.executable_name,a.executable_path,COALESCE(t.keyboard_count,0),COALESCE(t.mouse_click_count,0),COALESCE(t.wheel_units,0),COALESCE(p.capture_mode,'') FROM applications a LEFT JOIN daily_app_totals t ON t.app_id=a.id AND t.local_date=?1 LEFT JOIN app_policies p ON p.app_id=a.id WHERE a.executable_path=?2 COLLATE NOCASE",
             params![date, path],
             |row| {
                 let mode: String = row.get(5)?;
@@ -343,5 +367,35 @@ mod tests {
         ];
         db.record_batch(&events).expect("record batch");
         assert_eq!(db.totals("2026-10-11").unwrap(), (2, 3, 0, 1));
+    }
+
+    #[test]
+    fn legacy_path_casing_reuses_existing_application_identity() {
+        let mut db = Database::open(Path::new(":memory:")).expect("database");
+        db.conn
+            .execute(
+                "INSERT INTO applications(executable_name,executable_path,display_name,first_seen_at,last_seen_at) VALUES ('Editor.EXE','C:/Apps/Editor.EXE','Editor.EXE',datetime('now'),datetime('now'))",
+                [],
+            )
+            .expect("legacy app");
+        db.record(&InputEvent {
+            local_date: "2026-10-11".into(),
+            app_name: "editor.exe".into(),
+            app_path: "c:/apps/editor.exe".into(),
+            input_type: "keyboard".into(),
+            code: "scan:1e:ext:false".into(),
+            count: 2,
+            keyboard_count: 2,
+            mouse_count: 0,
+            wheel_units: 0,
+            detailed: true,
+        })
+        .expect("record");
+        assert_eq!(db.totals("2026-10-11").unwrap(), (2, 0, 0, 1));
+        assert!(
+            db.app_detail("2026-10-11", "C:/APPS/EDITOR.EXE")
+                .unwrap()
+                .is_some()
+        );
     }
 }
