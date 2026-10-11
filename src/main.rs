@@ -475,7 +475,6 @@ fn run() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::new("info,fontdb=off"))
         .init();
-    tray::start();
     let cfg = config::load_or_create()?;
     let dir = config::app_dir()?;
     tracing::info!(data_dir = %dir.display(), "portable data directory initialized");
@@ -490,6 +489,7 @@ fn run() -> anyhow::Result<()> {
         })?,
     ));
     let enabled = Arc::new(AtomicBool::new(cfg.capture_enabled));
+    tray::start(Arc::clone(&enabled));
     let events = collector::start(Arc::clone(&enabled));
     let db_writer = Arc::clone(&db);
     let data_generation = Arc::new(AtomicU64::new(0));

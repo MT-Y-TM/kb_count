@@ -1,6 +1,8 @@
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::thread;
 static REQUEST: AtomicU8 = AtomicU8::new(0);
+static CAPTURE_ENABLED: OnceLock<Arc<AtomicBool>> = OnceLock::new();
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
     Open,
@@ -18,14 +20,16 @@ pub fn take_request() -> Option<Command> {
     }
 }
 #[cfg(windows)]
-pub fn start() {
+pub fn start(enabled: Arc<AtomicBool>) {
+    let _ = CAPTURE_ENABLED.set(enabled);
     thread::Builder::new()
         .name("kb-tray".into())
         .spawn(|| unsafe { run_windows() })
         .expect("unable to start tray");
 }
 #[cfg(not(windows))]
-pub fn start() {
+pub fn start(enabled: Arc<AtomicBool>) {
+    let _ = CAPTURE_ENABLED.set(enabled);
     let _ = thread::Builder::new()
         .name("kb-tray".into())
         .spawn(|| thread::park());
@@ -125,7 +129,16 @@ unsafe fn show_menu(hwnd: windows::Win32::Foundation::HWND) {
         return;
     };
     let _ = AppendMenuW(menu, MF_STRING, 1, w!("打开统计面板"));
-    let _ = AppendMenuW(menu, MF_STRING, 2, w!("暂停 / 恢复统计"));
+    let pause_label = if CAPTURE_ENABLED
+        .get()
+        .map(|enabled| enabled.load(Ordering::Relaxed))
+        .unwrap_or(true)
+    {
+        w!("暂停统计")
+    } else {
+        w!("恢复统计")
+    };
+    let _ = AppendMenuW(menu, MF_STRING, 2, pause_label);
     let _ = AppendMenuW(menu, MF_STRING, 4, w!("设置"));
     let _ = AppendMenuW(menu, MF_STRING, 3, w!("退出"));
     let mut point = windows::Win32::Foundation::POINT::default();
