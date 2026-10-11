@@ -18,7 +18,6 @@ mod raw_input {
     use super::*;
     use chrono::Local;
     use std::collections::{HashMap, HashSet};
-    use std::ffi::c_void;
     use std::sync::{
         Mutex, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -477,33 +476,27 @@ mod raw_input {
             RAW_INPUT_DATA_ERRORS.fetch_add(1, Ordering::Relaxed);
             return;
         }
-        let mut size = 0u32;
-        let size_result = GetRawInputData(
-            windows::Win32::UI::Input::HRAWINPUT(lparam.0 as _),
-            RID_INPUT,
-            None,
-            &mut size,
-            std::mem::size_of::<RAWINPUTHEADER>() as u32,
-        );
-        // With a null data buffer Windows reports the required size through
-        // `size` and may return zero; only UINT_MAX indicates failure here.
-        if size_result == u32::MAX || size < std::mem::size_of::<RAWINPUT>() as u32 {
-            RAW_INPUT_DATA_ERRORS.fetch_add(1, Ordering::Relaxed);
-            return;
-        }
-        let mut aligned = vec![0u64; (size as usize).div_ceil(std::mem::size_of::<u64>())];
+        // A keyboard RAWINPUT payload can be smaller than the union's full
+        // size, so keep a complete zeroed RAWINPUT object as the destination
+        // instead of dereferencing a short byte buffer as a larger struct.
+        let capacity = std::mem::size_of::<RAWINPUT>() as u32;
+        let mut size = capacity;
+        let mut raw = RAWINPUT::default();
         let read_size = GetRawInputData(
             windows::Win32::UI::Input::HRAWINPUT(lparam.0 as _),
             RID_INPUT,
-            Some(aligned.as_mut_ptr() as *mut c_void),
+            Some((&mut raw as *mut RAWINPUT).cast()),
             &mut size,
             std::mem::size_of::<RAWINPUTHEADER>() as u32,
         );
-        if read_size == u32::MAX || read_size < std::mem::size_of::<RAWINPUT>() as u32 {
+        if read_size == u32::MAX
+            || read_size == 0
+            || read_size > capacity
+            || size < std::mem::size_of::<RAWINPUTHEADER>() as u32
+        {
             RAW_INPUT_DATA_ERRORS.fetch_add(1, Ordering::Relaxed);
             return;
         }
-        let raw = &*(aligned.as_ptr() as *const RAWINPUT);
         let date = Local::now().format("%Y-%m-%d").to_string();
         if raw.header.dwType == RIM_TYPEKEYBOARD.0 {
             if !USE_RAW_KEYBOARD.load(Ordering::Acquire) {
