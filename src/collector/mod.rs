@@ -56,6 +56,8 @@ mod raw_input {
     static USE_RAW_KEYBOARD: AtomicBool = AtomicBool::new(false);
     const RI_MOUSE_WHEEL: u16 = 0x0400;
     const RI_MOUSE_HWHEEL: u16 = 0x0800;
+    const RI_MOUSE_BUTTON_4_DOWN: u16 = 0x0040;
+    const RI_MOUSE_BUTTON_5_DOWN: u16 = 0x0100;
     const RI_KEY_BREAK: u16 = 0x01;
     const RI_KEY_E0: u16 = 0x02;
     const RI_KEY_E1: u16 = 0x04;
@@ -486,8 +488,8 @@ mod raw_input {
             (0x0001, "left"),
             (0x0004, "right"),
             (0x0010, "middle"),
-            (0x0040, "x1"),
-            (0x0080, "x2"),
+            (RI_MOUSE_BUTTON_4_DOWN, "x1"),
+            (RI_MOUSE_BUTTON_5_DOWN, "x2"),
         ] {
             if flags & flag != 0 {
                 emit_event(
@@ -540,7 +542,9 @@ mod raw_input {
         use super::normalize_wheel;
         use super::reset_input_state;
         use super::should_count_keydown;
-        use super::{RI_MOUSE_HWHEEL, RI_MOUSE_WHEEL};
+        use super::{
+            RI_MOUSE_BUTTON_4_DOWN, RI_MOUSE_BUTTON_5_DOWN, RI_MOUSE_HWHEEL, RI_MOUSE_WHEEL,
+        };
         use std::collections::HashSet;
 
         #[test]
@@ -576,6 +580,12 @@ mod raw_input {
         fn raw_mouse_wheel_flags_match_win32_values() {
             assert_eq!(RI_MOUSE_WHEEL, 0x0400);
             assert_eq!(RI_MOUSE_HWHEEL, 0x0800);
+        }
+
+        #[test]
+        fn raw_mouse_xbutton_down_flags_match_win32_values() {
+            assert_eq!(RI_MOUSE_BUTTON_4_DOWN, 0x0040);
+            assert_eq!(RI_MOUSE_BUTTON_5_DOWN, 0x0100);
         }
     }
 }
