@@ -621,6 +621,7 @@ mod raw_input {
             assert_eq!(normalize_wheel("a.exe", false, 30), 0);
             assert_eq!(normalize_wheel("b.exe", false, 90), 0);
             assert_eq!(normalize_wheel("a.exe", false, 90), 1);
+            assert_eq!(normalize_wheel("a.exe", true, 120), 1);
             reset_input_state();
         }
 
