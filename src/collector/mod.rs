@@ -38,10 +38,10 @@ mod raw_input {
     use windows::Win32::UI::WindowsAndMessaging::{
         CS_HREDRAW, CS_VREDRAW, CallNextHookEx, CreateWindowExW, DefWindowProcW, DispatchMessageW,
         GA_ROOT, GetAncestor, GetCursorPos, GetForegroundWindow, GetMessageW,
-        GetWindowThreadProcessId, KBDLLHOOKSTRUCT, LLKHF_INJECTED, LLKHF_UP, MSG, RegisterClassW,
-        SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_INPUT,
-        WM_KEYDOWN, WM_POWERBROADCAST, WM_SYSKEYDOWN, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP,
-        WindowFromPoint,
+        GetWindowThreadProcessId, HHOOK, KBDLLHOOKSTRUCT, LLKHF_INJECTED, LLKHF_UP, MSG,
+        RegisterClassW, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL,
+        WM_INPUT, WM_KEYDOWN, WM_POWERBROADCAST, WM_SYSKEYDOWN, WNDCLASSW, WS_EX_TOOLWINDOW,
+        WS_POPUP, WindowFromPoint,
     };
     use windows::core::{PWSTR, w};
     type ProcessCacheEntry = (String, String, Instant);
@@ -52,8 +52,12 @@ mod raw_input {
     static WHEEL_REMAINDER: OnceLock<Mutex<HashMap<String, (i32, i32)>>> = OnceLock::new();
     static DROPPED_EVENTS: AtomicU64 = AtomicU64::new(0);
     static FIRST_EVENT_LOGGED: AtomicBool = AtomicBool::new(false);
+    static USE_RAW_KEYBOARD: AtomicBool = AtomicBool::new(false);
     const RI_MOUSE_WHEEL: u16 = 0x0400;
     const RI_MOUSE_HWHEEL: u16 = 0x0800;
+    const RI_KEY_BREAK: u16 = 0x01;
+    const RI_KEY_E0: u16 = 0x02;
+    const RI_KEY_E1: u16 = 0x04;
 
     pub fn run(tx: SyncSender<InputEvent>, enabled: Arc<AtomicBool>) {
         let _ = SENDER.set(tx);
@@ -94,33 +98,54 @@ mod raw_input {
             if hwnd.0.is_null() {
                 return;
             }
-            let devices = [RAWINPUTDEVICE {
-                usUsagePage: 0x01,
-                usUsage: 0x02,
-                dwFlags: RIDEV_INPUTSINK | RIDEV_DEVNOTIFY,
-                hwndTarget: hwnd,
-            }];
+            let devices = [
+                RAWINPUTDEVICE {
+                    usUsagePage: 0x01,
+                    usUsage: 0x02,
+                    dwFlags: RIDEV_INPUTSINK | RIDEV_DEVNOTIFY,
+                    hwndTarget: hwnd,
+                },
+                RAWINPUTDEVICE {
+                    usUsagePage: 0x01,
+                    usUsage: 0x06,
+                    dwFlags: RIDEV_INPUTSINK | RIDEV_DEVNOTIFY,
+                    hwndTarget: hwnd,
+                },
+            ];
             if let Err(error) =
                 RegisterRawInputDevices(&devices, std::mem::size_of::<RAWINPUTDEVICE>() as u32)
             {
                 tracing::error!(%error, "RegisterRawInputDevices failed");
                 return;
             }
-            let keyboard_hook =
-                match SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), None, 0) {
-                    Ok(hook) => hook,
-                    Err(error) => {
-                        tracing::error!(%error, "SetWindowsHookExW keyboard hook failed");
-                        return;
-                    }
-                };
-            tracing::info!("Raw Input mouse and low-level keyboard collector started");
+            let keyboard_hook: Option<HHOOK> = match SetWindowsHookExW(
+                WH_KEYBOARD_LL,
+                Some(keyboard_hook),
+                None,
+                0,
+            ) {
+                Ok(hook) => Some(hook),
+                Err(error) => {
+                    USE_RAW_KEYBOARD.store(true, Ordering::Release);
+                    tracing::error!(
+                        %error,
+                        "SetWindowsHookExW keyboard hook failed; using Raw Input keyboard fallback"
+                    );
+                    None
+                }
+            };
+            tracing::info!(
+                low_level_keyboard_hook = keyboard_hook.is_some(),
+                "Raw Input mouse and keyboard collector started"
+            );
             let mut msg = MSG::default();
             while GetMessageW(&mut msg, None, 0, 0).into() {
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
-            let _ = UnhookWindowsHookEx(keyboard_hook);
+            if let Some(keyboard_hook) = keyboard_hook {
+                let _ = UnhookWindowsHookEx(keyboard_hook);
+            }
         }
     }
 
@@ -399,20 +424,41 @@ mod raw_input {
         let raw = &*(aligned.as_ptr() as *const RAWINPUT);
         let date = Local::now().format("%Y-%m-%d").to_string();
         if raw.header.dwType == RIM_TYPEKEYBOARD.0 {
+            if !USE_RAW_KEYBOARD.load(Ordering::Acquire) {
+                return;
+            }
             let k = raw.data.keyboard;
-            if k.Message == 0x0100 {
+            let key_id =
+                (u32::from(k.MakeCode) << 1) | u32::from(k.Flags & (RI_KEY_E0 | RI_KEY_E1) != 0);
+            if k.Flags & RI_KEY_BREAK == 0 {
+                let pressed = PRESSED_KEYS.get_or_init(|| Mutex::new(HashSet::new()));
+                let mut pressed = pressed.lock().expect("keyboard state poisoned");
+                let physically_down = GetAsyncKeyState(k.VKey as i32) < 0;
+                if !should_count_keydown(&mut pressed, key_id, physically_down) {
+                    return;
+                }
+                drop(pressed);
                 let (app_name, app_path) = foreground_process();
                 emit_event(
                     date,
                     app_name,
                     app_path,
                     "keyboard",
-                    format!("scan:{:02x}:ext:{}", k.MakeCode, (k.Flags & 1) != 0),
+                    format!(
+                        "scan:{:02x}:ext:{}",
+                        k.MakeCode,
+                        k.Flags & (RI_KEY_E0 | RI_KEY_E1) != 0
+                    ),
                     1,
                     1,
                     0,
                     0,
                 );
+            } else if let Some(pressed) = PRESSED_KEYS.get() {
+                pressed
+                    .lock()
+                    .expect("keyboard state poisoned")
+                    .remove(&key_id);
             }
             return;
         }
