@@ -287,7 +287,9 @@ impl Database {
 
     pub fn clear_all(&mut self) -> Result<()> {
         let tx = self.conn.transaction()?;
-        tx.execute_batch("DELETE FROM daily_input_counts; DELETE FROM daily_app_totals; DELETE FROM app_policies; DELETE FROM applications;")?;
+        // Clearing statistics must not discard application identities or the
+        // privacy policies the user configured for them.
+        tx.execute_batch("DELETE FROM daily_input_counts; DELETE FROM daily_app_totals;")?;
         tx.commit()?;
         Ok(())
     }
@@ -386,7 +388,7 @@ mod tests {
     }
 
     #[test]
-    fn clear_all_removes_statistics_and_applications() {
+    fn clear_all_removes_statistics_but_preserves_policy_identity() {
         let mut db = Database::open(Path::new(":memory:")).expect("database");
         db.record(&InputEvent {
             local_date: "2026-10-11".into(),
@@ -401,13 +403,16 @@ mod tests {
             detailed: true,
         })
         .expect("record");
+        db.set_policy("C:/Apps/editor.exe", "excluded")
+            .expect("policy");
         db.clear_all().expect("clear");
         assert_eq!(db.totals("2026-10-11").unwrap(), (0, 0, 0, 0));
-        assert!(
-            db.app_detail("2026-10-11", "C:/Apps/editor.exe")
-                .unwrap()
-                .is_none()
-        );
+        let detail = db
+            .app_detail("2026-10-11", "C:/Apps/editor.exe")
+            .unwrap()
+            .expect("application identity should remain");
+        assert_eq!(detail.policy, CaptureMode::Excluded);
+        assert_eq!(detail.keyboard, 0);
     }
 
     #[test]
