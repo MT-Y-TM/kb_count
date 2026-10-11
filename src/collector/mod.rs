@@ -39,9 +39,9 @@ mod raw_input {
         CS_HREDRAW, CS_VREDRAW, CallNextHookEx, CreateWindowExW, DefWindowProcW, DispatchMessageW,
         GA_ROOT, GetAncestor, GetCursorPos, GetForegroundWindow, GetMessageW,
         GetWindowThreadProcessId, HHOOK, KBDLLHOOKSTRUCT, LLKHF_INJECTED, LLKHF_UP, MSG,
-        RegisterClassW, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL,
-        WM_INPUT, WM_KEYDOWN, WM_POWERBROADCAST, WM_SYSKEYDOWN, WNDCLASSW, WS_EX_TOOLWINDOW,
-        WS_POPUP, WindowFromPoint,
+        RegisterClassW, SetTimer, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx,
+        WH_KEYBOARD_LL, WM_INPUT, WM_KEYDOWN, WM_POWERBROADCAST, WM_SYSKEYDOWN, WM_TIMER,
+        WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP, WindowFromPoint,
     };
     use windows::core::{PWSTR, w};
     type ProcessCacheEntry = (String, String, Instant);
@@ -54,6 +54,14 @@ mod raw_input {
     static FIRST_KEYBOARD_LOGGED: AtomicBool = AtomicBool::new(false);
     static FIRST_MOUSE_LOGGED: AtomicBool = AtomicBool::new(false);
     static USE_RAW_KEYBOARD: AtomicBool = AtomicBool::new(false);
+    static RAW_INPUT_MESSAGES: AtomicU64 = AtomicU64::new(0);
+    static RAW_INPUT_DATA_ERRORS: AtomicU64 = AtomicU64::new(0);
+    static RAW_MOUSE_PACKETS: AtomicU64 = AtomicU64::new(0);
+    static RAW_MOUSE_BUTTON_PACKETS: AtomicU64 = AtomicU64::new(0);
+    static RAW_MOUSE_WHEEL_PACKETS: AtomicU64 = AtomicU64::new(0);
+    static MOUSE_EVENTS_ENQUEUED: AtomicU64 = AtomicU64::new(0);
+    static MOUSE_EVENTS_DROPPED: AtomicU64 = AtomicU64::new(0);
+    static MOUSE_UNKNOWN_ATTRIBUTION: AtomicU64 = AtomicU64::new(0);
     const RI_MOUSE_WHEEL: u16 = 0x0400;
     const RI_MOUSE_HWHEEL: u16 = 0x0800;
     const RI_MOUSE_BUTTON_4_DOWN: u16 = 0x0040;
@@ -101,30 +109,39 @@ mod raw_input {
             if hwnd.0.is_null() {
                 return;
             }
-            let devices = [
-                RAWINPUTDEVICE {
-                    usUsagePage: 0x01,
-                    usUsage: 0x02,
-                    dwFlags: RIDEV_INPUTSINK | RIDEV_DEVNOTIFY,
-                    hwndTarget: hwnd,
-                },
-                RAWINPUTDEVICE {
-                    usUsagePage: 0x01,
-                    usUsage: 0x06,
-                    dwFlags: RIDEV_INPUTSINK | RIDEV_DEVNOTIFY,
-                    hwndTarget: hwnd,
-                },
-            ];
-            let raw_input_registered = match RegisterRawInputDevices(
-                &devices,
+            let mouse_device = RAWINPUTDEVICE {
+                usUsagePage: 0x01,
+                usUsage: 0x02,
+                dwFlags: RIDEV_INPUTSINK | RIDEV_DEVNOTIFY,
+                hwndTarget: hwnd,
+            };
+            let keyboard_device = RAWINPUTDEVICE {
+                usUsagePage: 0x01,
+                usUsage: 0x06,
+                dwFlags: RIDEV_INPUTSINK | RIDEV_DEVNOTIFY,
+                hwndTarget: hwnd,
+            };
+            let mouse_raw_input_registered = match RegisterRawInputDevices(
+                &[mouse_device],
                 std::mem::size_of::<RAWINPUTDEVICE>() as u32,
             ) {
                 Ok(()) => true,
                 Err(error) => {
-                    tracing::error!(%error, "RegisterRawInputDevices failed; keyboard hook will continue");
+                    tracing::error!(%error, "RegisterRawInputDevices mouse registration failed");
                     false
                 }
             };
+            let keyboard_raw_input_registered = match RegisterRawInputDevices(
+                &[keyboard_device],
+                std::mem::size_of::<RAWINPUTDEVICE>() as u32,
+            ) {
+                Ok(()) => true,
+                Err(error) => {
+                    tracing::error!(%error, "RegisterRawInputDevices keyboard registration failed");
+                    false
+                }
+            };
+            let raw_input_registered = mouse_raw_input_registered && keyboard_raw_input_registered;
             let keyboard_hook: Option<HHOOK> = match SetWindowsHookExW(
                 WH_KEYBOARD_LL,
                 Some(keyboard_hook),
@@ -143,9 +160,14 @@ mod raw_input {
             };
             tracing::info!(
                 raw_input_registered,
+                mouse_raw_input_registered,
+                keyboard_raw_input_registered,
                 low_level_keyboard_hook = keyboard_hook.is_some(),
                 "Raw Input mouse and keyboard collector started"
             );
+            if SetTimer(hwnd, 1, 10_000, None) == 0 {
+                tracing::warn!("unable to start mouse input diagnostic timer");
+            }
             let mut msg = MSG::default();
             while GetMessageW(&mut msg, None, 0, 0).into() {
                 let _ = TranslateMessage(&msg);
@@ -154,6 +176,7 @@ mod raw_input {
             if let Some(keyboard_hook) = keyboard_hook {
                 let _ = UnhookWindowsHookEx(keyboard_hook);
             }
+            log_diagnostics();
         }
     }
 
@@ -233,6 +256,8 @@ mod raw_input {
             unsafe {
                 handle_input(hwnd, lparam);
             }
+        } else if msg == WM_TIMER {
+            log_diagnostics();
         } else if msg == WM_POWERBROADCAST {
             reset_input_state();
         }
@@ -321,6 +346,20 @@ mod raw_input {
             .map(|enabled| enabled.load(Ordering::Relaxed))
             .unwrap_or(true)
     }
+
+    fn log_diagnostics() {
+        tracing::info!(
+            raw_input_messages = RAW_INPUT_MESSAGES.load(Ordering::Relaxed),
+            raw_input_data_errors = RAW_INPUT_DATA_ERRORS.load(Ordering::Relaxed),
+            raw_mouse_packets = RAW_MOUSE_PACKETS.load(Ordering::Relaxed),
+            mouse_button_packets = RAW_MOUSE_BUTTON_PACKETS.load(Ordering::Relaxed),
+            mouse_wheel_packets = RAW_MOUSE_WHEEL_PACKETS.load(Ordering::Relaxed),
+            mouse_events_enqueued = MOUSE_EVENTS_ENQUEUED.load(Ordering::Relaxed),
+            mouse_events_dropped = MOUSE_EVENTS_DROPPED.load(Ordering::Relaxed),
+            mouse_unknown_attribution = MOUSE_UNKNOWN_ATTRIBUTION.load(Ordering::Relaxed),
+            "mouse input diagnostic summary"
+        );
+    }
     #[allow(clippy::too_many_arguments)]
     fn emit_event(
         date: String,
@@ -357,8 +396,14 @@ mod raw_input {
                 wheel_units,
                 detailed: true,
             });
+            if result.is_ok() && input_type == "mouse" {
+                MOUSE_EVENTS_ENQUEUED.fetch_add(1, Ordering::Relaxed);
+            }
             if result.is_err() {
                 let dropped = DROPPED_EVENTS.fetch_add(1, Ordering::Relaxed) + 1;
+                if input_type == "mouse" {
+                    MOUSE_EVENTS_DROPPED.fetch_add(1, Ordering::Relaxed);
+                }
                 if dropped.is_power_of_two() {
                     tracing::warn!(
                         dropped,
@@ -397,6 +442,22 @@ mod raw_input {
         i64::from(units)
     }
 
+    fn mouse_button_codes(flags: u16) -> impl Iterator<Item = &'static str> {
+        [
+            (0x0001, "left"),
+            (0x0004, "right"),
+            (0x0010, "middle"),
+            (RI_MOUSE_BUTTON_4_DOWN, "x1"),
+            (RI_MOUSE_BUTTON_5_DOWN, "x2"),
+        ]
+        .into_iter()
+        .filter_map(move |(mask, code)| (flags & mask != 0).then_some(code))
+    }
+
+    fn signed_wheel_delta(button_data: u16) -> i32 {
+        i32::from(i16::from_ne_bytes(button_data.to_ne_bytes()))
+    }
+
     fn should_count_keydown(
         pressed: &mut HashSet<u32>,
         key_id: u32,
@@ -411,27 +472,35 @@ mod raw_input {
 
     #[allow(unsafe_op_in_unsafe_fn)]
     unsafe fn handle_input(_hwnd: HWND, lparam: LPARAM) {
+        RAW_INPUT_MESSAGES.fetch_add(1, Ordering::Relaxed);
+        if lparam.0 == 0 {
+            RAW_INPUT_DATA_ERRORS.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
         let mut size = 0u32;
-        if GetRawInputData(
+        let size_result = GetRawInputData(
             windows::Win32::UI::Input::HRAWINPUT(lparam.0 as _),
             RID_INPUT,
             None,
             &mut size,
             std::mem::size_of::<RAWINPUTHEADER>() as u32,
-        ) == u32::MAX
-            || size == 0
-        {
+        );
+        // With a null data buffer Windows reports the required size through
+        // `size` and may return zero; only UINT_MAX indicates failure here.
+        if size_result == u32::MAX || size < std::mem::size_of::<RAWINPUT>() as u32 {
+            RAW_INPUT_DATA_ERRORS.fetch_add(1, Ordering::Relaxed);
             return;
         }
         let mut aligned = vec![0u64; (size as usize).div_ceil(std::mem::size_of::<u64>())];
-        if GetRawInputData(
+        let read_size = GetRawInputData(
             windows::Win32::UI::Input::HRAWINPUT(lparam.0 as _),
             RID_INPUT,
             Some(aligned.as_mut_ptr() as *mut c_void),
             &mut size,
             std::mem::size_of::<RAWINPUTHEADER>() as u32,
-        ) == u32::MAX
-        {
+        );
+        if read_size == u32::MAX || read_size < std::mem::size_of::<RAWINPUT>() as u32 {
+            RAW_INPUT_DATA_ERRORS.fetch_add(1, Ordering::Relaxed);
             return;
         }
         let raw = &*(aligned.as_ptr() as *const RAWINPUT);
@@ -478,46 +547,39 @@ mod raw_input {
         if raw.header.dwType != RIM_TYPEMOUSE.0 {
             return;
         }
+        RAW_MOUSE_PACKETS.fetch_add(1, Ordering::Relaxed);
         if !capture_enabled() {
             reset_wheel_state();
             return;
         }
         let (app_name, app_path) = point_process();
-        let flags = raw.data.mouse.Anonymous.Anonymous.usButtonFlags;
-        for (flag, code) in [
-            (0x0001, "left"),
-            (0x0004, "right"),
-            (0x0010, "middle"),
-            (RI_MOUSE_BUTTON_4_DOWN, "x1"),
-            (RI_MOUSE_BUTTON_5_DOWN, "x2"),
-        ] {
-            if flags & flag != 0 {
-                emit_event(
-                    date.clone(),
-                    app_name.clone(),
-                    app_path.clone(),
-                    "mouse",
-                    code.into(),
-                    1,
-                    0,
-                    1,
-                    0,
-                );
-            }
+        if app_path == "Unknown" {
+            MOUSE_UNKNOWN_ATTRIBUTION.fetch_add(1, Ordering::Relaxed);
         }
-        let delta = i32::from(i16::from_ne_bytes(
-            raw.data
-                .mouse
-                .Anonymous
-                .Anonymous
-                .usButtonData
-                .to_ne_bytes(),
-        ));
+        let flags = raw.data.mouse.Anonymous.Anonymous.usButtonFlags;
+        if mouse_button_codes(flags).next().is_some() {
+            RAW_MOUSE_BUTTON_PACKETS.fetch_add(1, Ordering::Relaxed);
+        }
+        for code in mouse_button_codes(flags) {
+            emit_event(
+                date.clone(),
+                app_name.clone(),
+                app_path.clone(),
+                "mouse",
+                code.into(),
+                1,
+                0,
+                1,
+                0,
+            );
+        }
+        let delta = signed_wheel_delta(raw.data.mouse.Anonymous.Anonymous.usButtonData);
         for (flag, horizontal, code) in [
             (RI_MOUSE_WHEEL, false, "wheel"),
             (RI_MOUSE_HWHEEL, true, "hwheel"),
         ] {
             if flags & flag != 0 {
+                RAW_MOUSE_WHEEL_PACKETS.fetch_add(1, Ordering::Relaxed);
                 let units = normalize_wheel(&app_path, horizontal, delta);
                 if units != 0 {
                     emit_event(
@@ -529,7 +591,7 @@ mod raw_input {
                         units.abs(),
                         0,
                         0,
-                        units,
+                        units.abs(),
                     );
                 }
             }
@@ -538,10 +600,12 @@ mod raw_input {
 
     #[cfg(test)]
     mod tests {
+        use super::mouse_button_codes;
         use super::normalize_delta;
         use super::normalize_wheel;
         use super::reset_input_state;
         use super::should_count_keydown;
+        use super::signed_wheel_delta;
         use super::{
             RI_MOUSE_BUTTON_4_DOWN, RI_MOUSE_BUTTON_5_DOWN, RI_MOUSE_HWHEEL, RI_MOUSE_WHEEL,
         };
@@ -586,6 +650,21 @@ mod raw_input {
         fn raw_mouse_xbutton_down_flags_match_win32_values() {
             assert_eq!(RI_MOUSE_BUTTON_4_DOWN, 0x0040);
             assert_eq!(RI_MOUSE_BUTTON_5_DOWN, 0x0100);
+        }
+
+        #[test]
+        fn raw_mouse_button_flags_map_all_supported_buttons() {
+            let flags = 0x0001 | 0x0004 | 0x0010 | RI_MOUSE_BUTTON_4_DOWN | RI_MOUSE_BUTTON_5_DOWN;
+            assert_eq!(
+                mouse_button_codes(flags).collect::<Vec<_>>(),
+                vec!["left", "right", "middle", "x1", "x2"]
+            );
+        }
+
+        #[test]
+        fn raw_mouse_button_data_is_signed() {
+            assert_eq!(signed_wheel_delta(120), 120);
+            assert_eq!(signed_wheel_delta((-120i16) as u16), -120);
         }
     }
 }

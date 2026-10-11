@@ -18,6 +18,9 @@ impl Aggregator {
             event.code = "total".into();
             event.detailed = false;
         }
+        if event.input_type == "mouse" && event.wheel_units != 0 {
+            event.wheel_units = event.wheel_units.abs();
+        }
         event.app_path = normalize_app_path(&event.app_path);
         let key = (
             event.local_date.clone(),
@@ -134,5 +137,26 @@ mod tests {
         assert_eq!(values[0].input_type, "mouse");
         assert_eq!(values[0].mouse_count, 0);
         assert_eq!(values[0].wheel_units, 2);
+    }
+
+    #[test]
+    fn wheel_total_uses_absolute_units_for_downward_scroll() {
+        let mut aggregator = Aggregator::default();
+        aggregator.record(
+            InputEvent {
+                local_date: "2026-10-11".into(),
+                app_name: "x".into(),
+                app_path: "x.exe".into(),
+                input_type: "mouse".into(),
+                code: "wheel_down".into(),
+                count: 2,
+                keyboard_count: 0,
+                mouse_count: 0,
+                wheel_units: -2,
+                detailed: true,
+            },
+            CaptureMode::Detailed,
+        );
+        assert_eq!(aggregator.drain()[0].wheel_units, 2);
     }
 }

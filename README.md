@@ -7,7 +7,7 @@ Windows 便携式键盘鼠标输入统计工具，Rust 2024 + Slint + windows-rs
 - EXE 同目录的 `config.toml`、`stats.db` 便携路径；无写入权限时给出明确错误。
 - SQLite WAL schema：应用、日输入明细、日汇总、应用策略，并在退出时执行 checkpoint。
 - Windows Raw Input 隐藏窗口接收鼠标事件，并使用低级键盘钩子接收物理键盘 KeyDown；两者均在采集线程消息循环中处理，键盘自动重复会被过滤。
-- 键盘 KeyDown、扫描码/扩展标识、鼠标按钮、滚轮 Delta 归一化。
+- 键盘 KeyDown、扫描码/扩展标识、鼠标按钮、滚轮 Delta 归一化；滚轮总量累计绝对单位，方向在明细代码中区分。
 - `daily_input_counts.input_type` 统一使用 `keyboard` / `mouse`；滚轮通过 `wheel_up`、`wheel_down`、`hwheel_up`、`hwheel_down` 代码区分，旧版 `wheel` 行会在打开数据库时自动迁移。
 - 前台进程路径识别和 PID 缓存，无法识别时使用 Unknown。
 - 有界输入队列、内存聚合、5 秒批量写入、暂停/恢复。
@@ -59,12 +59,14 @@ Windows 10/11 长时间资源占用测试仍需补齐。当前构建、启动、
 启动后控制台应出现类似日志：
 
 ```text
-INFO kb_count::collector::raw_input: Raw Input mouse and keyboard collector started raw_input_registered=true low_level_keyboard_hook=true
+INFO kb_count::collector::raw_input: Raw Input mouse and keyboard collector started raw_input_registered=true mouse_raw_input_registered=true keyboard_raw_input_registered=true low_level_keyboard_hook=true
 INFO kb_count: portable data directory initialized data_dir=... capture_enabled=true
 INFO kb_count::collector::raw_input: first input event received input_type="mouse"
+INFO kb_count::collector::raw_input: mouse input diagnostic summary raw_input_messages=... raw_mouse_packets=... mouse_button_packets=... mouse_wheel_packets=... mouse_events_enqueued=... mouse_unknown_attribution=...
 ```
 
 键盘和鼠标分别只记录一次首事件诊断日志；日志不包含按键代码、输入内容、坐标或窗口标题。
+鼠标诊断汇总每 10 秒输出一次，仅包含阶段计数；`raw_mouse_packets=0` 表示尚未收到鼠标 Raw Input，`mouse_events_enqueued` 则表示已进入统计队列。
 
 最新版本默认过滤该 fontdb 字体扫描警告。请确认运行的是最新 `target/release/kb_count.exe`，并检查日志中的 `data_dir` 与 `stats.db` 是否在同一目录。统计默认每 5 秒批量写入数据库。
 
