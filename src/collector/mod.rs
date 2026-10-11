@@ -51,7 +51,8 @@ mod raw_input {
     static PRESSED_KEYS: OnceLock<Mutex<HashSet<u32>>> = OnceLock::new();
     static WHEEL_REMAINDER: OnceLock<Mutex<HashMap<String, (i32, i32)>>> = OnceLock::new();
     static DROPPED_EVENTS: AtomicU64 = AtomicU64::new(0);
-    static FIRST_EVENT_LOGGED: AtomicBool = AtomicBool::new(false);
+    static FIRST_KEYBOARD_LOGGED: AtomicBool = AtomicBool::new(false);
+    static FIRST_MOUSE_LOGGED: AtomicBool = AtomicBool::new(false);
     static USE_RAW_KEYBOARD: AtomicBool = AtomicBool::new(false);
     const RI_MOUSE_WHEEL: u16 = 0x0400;
     const RI_MOUSE_HWHEEL: u16 = 0x0800;
@@ -329,7 +330,12 @@ mod raw_input {
             return;
         }
         if let Some(sender) = SENDER.get() {
-            if !FIRST_EVENT_LOGGED.swap(true, Ordering::AcqRel) {
+            let first_logged = match input_type {
+                "keyboard" => &FIRST_KEYBOARD_LOGGED,
+                "mouse" => &FIRST_MOUSE_LOGGED,
+                _ => &FIRST_KEYBOARD_LOGGED,
+            };
+            if !first_logged.swap(true, Ordering::AcqRel) {
                 tracing::info!(input_type, "first input event received");
             }
             let result = sender.try_send(InputEvent {
