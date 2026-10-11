@@ -113,12 +113,16 @@ mod raw_input {
                     hwndTarget: hwnd,
                 },
             ];
-            if let Err(error) =
-                RegisterRawInputDevices(&devices, std::mem::size_of::<RAWINPUTDEVICE>() as u32)
-            {
-                tracing::error!(%error, "RegisterRawInputDevices failed");
-                return;
-            }
+            let raw_input_registered = match RegisterRawInputDevices(
+                &devices,
+                std::mem::size_of::<RAWINPUTDEVICE>() as u32,
+            ) {
+                Ok(()) => true,
+                Err(error) => {
+                    tracing::error!(%error, "RegisterRawInputDevices failed; keyboard hook will continue");
+                    false
+                }
+            };
             let keyboard_hook: Option<HHOOK> = match SetWindowsHookExW(
                 WH_KEYBOARD_LL,
                 Some(keyboard_hook),
@@ -136,6 +140,7 @@ mod raw_input {
                 }
             };
             tracing::info!(
+                raw_input_registered,
                 low_level_keyboard_hook = keyboard_hook.is_some(),
                 "Raw Input mouse and keyboard collector started"
             );

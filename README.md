@@ -59,7 +59,7 @@ Windows 10/11 长时间资源占用测试仍需补齐。当前构建、启动、
 启动后控制台应出现类似日志：
 
 ```text
-INFO kb_count::collector::raw_input: Raw Input mouse and keyboard collector started low_level_keyboard_hook=true
+INFO kb_count::collector::raw_input: Raw Input mouse and keyboard collector started raw_input_registered=true low_level_keyboard_hook=true
 INFO kb_count: portable data directory initialized data_dir=... capture_enabled=true
 INFO kb_count::collector::raw_input: first input event received input_type="mouse"
 ```
