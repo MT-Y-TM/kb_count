@@ -66,7 +66,11 @@ pub fn normalize_app_path(path: &str) -> String {
     if value.is_empty() || value.eq_ignore_ascii_case("unknown") {
         return "Unknown".into();
     }
-    value.to_lowercase()
+    let value = value
+        .strip_prefix(r"\\?\")
+        .or_else(|| value.strip_prefix(r"\\??\"))
+        .unwrap_or(value);
+    value.replace('/', "\\").to_lowercase()
 }
 
 #[cfg(test)]
@@ -77,12 +81,16 @@ mod tests {
     fn normalizes_identity_without_merging_unknown_with_real_paths() {
         assert_eq!(
             normalize_app_path(" C:/Apps/Editor.EXE "),
-            "c:/apps/editor.exe"
+            r"c:\apps\editor.exe"
         );
         assert_eq!(normalize_app_path("unknown"), "Unknown");
         assert_eq!(
             CaptureMode::for_application("C:/Apps/Chrome.EXE"),
             CaptureMode::TotalsOnly
+        );
+        assert_eq!(
+            normalize_app_path(r"\\?\C:/Apps/Editor.EXE"),
+            r"c:\apps\editor.exe"
         );
     }
 }

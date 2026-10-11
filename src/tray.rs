@@ -81,7 +81,10 @@ unsafe fn run_windows() {
     for (dst, src) in data.szTip.iter_mut().zip("kb_count".encode_utf16()) {
         *dst = src;
     }
-    let _ = Shell_NotifyIconW(NIM_ADD, &data);
+    if !Shell_NotifyIconW(NIM_ADD, &data).as_bool() {
+        tracing::error!("无法创建系统托盘图标");
+        return;
+    }
     let mut msg = MSG::default();
     while GetMessageW(&mut msg, None, 0, 0).into() {
         let _ = TranslateMessage(&msg);

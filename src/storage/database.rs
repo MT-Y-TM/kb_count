@@ -35,7 +35,7 @@ const SCHEMA_VERSION: i64 = 1;
 
 fn create_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS applications(id INTEGER PRIMARY KEY, executable_name TEXT NOT NULL, executable_path TEXT NOT NULL UNIQUE, display_name TEXT NOT NULL, first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS daily_input_counts(local_date TEXT NOT NULL, app_id INTEGER NOT NULL, input_type TEXT NOT NULL, input_code TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY(local_date,app_id,input_type,input_code)); CREATE TABLE IF NOT EXISTS daily_app_totals(local_date TEXT NOT NULL, app_id INTEGER NOT NULL, keyboard_count INTEGER NOT NULL DEFAULT 0, mouse_click_count INTEGER NOT NULL DEFAULT 0, wheel_units INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(local_date,app_id)); CREATE TABLE IF NOT EXISTS app_policies(app_id INTEGER PRIMARY KEY, capture_mode TEXT NOT NULL DEFAULT 'detailed'); CREATE INDEX IF NOT EXISTS idx_daily_input_date ON daily_input_counts(local_date); CREATE INDEX IF NOT EXISTS idx_daily_totals_date ON daily_app_totals(local_date);",
+        "CREATE TABLE IF NOT EXISTS applications(id INTEGER PRIMARY KEY, executable_name TEXT NOT NULL, executable_path TEXT NOT NULL UNIQUE, display_name TEXT NOT NULL, first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS daily_input_counts(local_date TEXT NOT NULL, app_id INTEGER NOT NULL, input_type TEXT NOT NULL, input_code TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY(local_date,app_id,input_type,input_code)); CREATE TABLE IF NOT EXISTS daily_app_totals(local_date TEXT NOT NULL, app_id INTEGER NOT NULL, keyboard_count INTEGER NOT NULL DEFAULT 0, mouse_click_count INTEGER NOT NULL DEFAULT 0, wheel_units INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(local_date,app_id)); CREATE TABLE IF NOT EXISTS app_policies(app_id INTEGER PRIMARY KEY, capture_mode TEXT NOT NULL DEFAULT 'detailed'); CREATE INDEX IF NOT EXISTS idx_daily_input_date ON daily_input_counts(local_date); CREATE INDEX IF NOT EXISTS idx_daily_input_lookup ON daily_input_counts(local_date,input_type,app_id); CREATE INDEX IF NOT EXISTS idx_daily_totals_date ON daily_app_totals(local_date);",
     )?;
     Ok(())
 }
@@ -54,6 +54,12 @@ fn migrate(conn: &Connection) -> Result<()> {
         // Keep indexes present when opening a database created by an older 1.x build.
         create_schema(conn)?;
     }
+    // Older development builds used a separate `wheel` input type. Merge
+    // those aggregate rows into the schema's mouse category while preserving
+    // any rows already written by the current version.
+    conn.execute_batch(
+        "INSERT INTO daily_input_counts(local_date,app_id,input_type,input_code,count) SELECT local_date,app_id,'mouse',input_code,count FROM daily_input_counts WHERE input_type='wheel' ON CONFLICT(local_date,app_id,input_type,input_code) DO UPDATE SET count=count+excluded.count; DELETE FROM daily_input_counts WHERE input_type='wheel';",
+    )?;
     Ok(())
 }
 impl Database {
@@ -155,10 +161,35 @@ impl Database {
         app_path: Option<&str>,
         input_type: &str,
     ) -> Result<Vec<KeyTotal>> {
+        let (type_filter, uses_type_parameter) = match input_type {
+            "keyboard" => ("c.input_type='keyboard'", false),
+            // Wheel rows use the mouse input type but have a wheel_* code.
+            "mouse" => (
+                "c.input_type='mouse' AND c.input_code NOT LIKE 'wheel_%' AND c.input_code NOT LIKE 'hwheel_%'",
+                false,
+            ),
+            "wheel" => (
+                "c.input_type='mouse' AND (c.input_code LIKE 'wheel_%' OR c.input_code LIKE 'hwheel_%')",
+                false,
+            ),
+            _ => ("c.input_type=?3", true),
+        };
         if let Some(path) = app_path {
             let path = normalize_app_path(path);
-            let mut stmt=self.conn.prepare("SELECT c.input_code,SUM(c.count) FROM daily_input_counts c JOIN applications a ON a.id=c.app_id WHERE c.local_date=?1 AND c.input_type=?3 AND a.executable_path=?2 COLLATE NOCASE GROUP BY c.input_code ORDER BY SUM(c.count) DESC")?;
-            let rows = stmt.query_map(params![date, path, input_type], |r| {
+            let sql = format!(
+                "SELECT c.input_code,SUM(c.count) FROM daily_input_counts c JOIN applications a ON a.id=c.app_id WHERE c.local_date=?1 AND {type_filter} AND a.executable_path=?2 COLLATE NOCASE GROUP BY c.input_code ORDER BY SUM(c.count) DESC"
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
+            if uses_type_parameter {
+                let rows = stmt.query_map(params![date, path, input_type], |r| {
+                    Ok(KeyTotal {
+                        code: r.get(0)?,
+                        count: r.get(1)?,
+                    })
+                })?;
+                return Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?);
+            }
+            let rows = stmt.query_map(params![date, path], |r| {
                 Ok(KeyTotal {
                     code: r.get(0)?,
                     count: r.get(1)?,
@@ -166,8 +197,20 @@ impl Database {
             })?;
             return Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?);
         }
-        let mut stmt=self.conn.prepare("SELECT c.input_code,SUM(c.count) FROM daily_input_counts c WHERE c.local_date=?1 AND c.input_type=?2 GROUP BY c.input_code ORDER BY SUM(c.count) DESC")?;
-        let rows = stmt.query_map(params![date, input_type], |r| {
+        let sql = format!(
+            "SELECT c.input_code,SUM(c.count) FROM daily_input_counts c WHERE c.local_date=?1 AND {type_filter} GROUP BY c.input_code ORDER BY SUM(c.count) DESC"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        if uses_type_parameter {
+            let rows = stmt.query_map(params![date, input_type], |r| {
+                Ok(KeyTotal {
+                    code: r.get(0)?,
+                    count: r.get(1)?,
+                })
+            })?;
+            return Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?);
+        }
+        let rows = stmt.query_map([date], |r| {
             Ok(KeyTotal {
                 code: r.get(0)?,
                 count: r.get(1)?,
@@ -280,6 +323,37 @@ mod tests {
     }
 
     #[test]
+    fn schema_migration_merges_legacy_wheel_rows() {
+        let conn = Connection::open_in_memory().expect("connection");
+        create_schema(&conn).expect("schema");
+        conn.execute(
+            "INSERT INTO daily_input_counts(local_date,app_id,input_type,input_code,count) VALUES ('2026-10-11',1,'wheel','wheel_up',2)",
+            [],
+        )
+        .expect("legacy wheel row");
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION)
+            .expect("version");
+        migrate(&conn).expect("migration");
+        let row: (String, i64) = conn
+            .query_row(
+                "SELECT input_type,count FROM daily_input_counts WHERE local_date='2026-10-11' AND app_id=1 AND input_code='wheel_up'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("migrated row");
+        assert_eq!(row, ("mouse".into(), 2));
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM daily_input_counts WHERE input_type='wheel'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .expect("legacy rows removed"),
+            0
+        );
+    }
+
+    #[test]
     fn totals_only_event_updates_totals_without_key_rows() {
         let mut db = Database::open(Path::new(":memory:")).expect("database");
         db.record(&InputEvent {
@@ -306,7 +380,7 @@ mod tests {
             .expect("policy");
         let policies = db.policies().expect("policies");
         assert_eq!(
-            policies.get("c:/apps/editor.exe"),
+            policies.get(r"c:\apps\editor.exe"),
             Some(&CaptureMode::Excluded)
         );
     }
@@ -364,9 +438,31 @@ mod tests {
                 wheel_units: 0,
                 detailed: true,
             },
+            InputEvent {
+                local_date: "2026-10-11".into(),
+                app_name: "editor.exe".into(),
+                app_path: "C:/Apps/editor.exe".into(),
+                input_type: "mouse".into(),
+                code: "wheel_up".into(),
+                count: 2,
+                keyboard_count: 0,
+                mouse_count: 0,
+                wheel_units: 2,
+                detailed: true,
+            },
         ];
         db.record_batch(&events).expect("record batch");
-        assert_eq!(db.totals("2026-10-11").unwrap(), (2, 3, 0, 1));
+        assert_eq!(db.totals("2026-10-11").unwrap(), (2, 3, 2, 1));
+        assert_eq!(
+            db.input_ranking("2026-10-11", None, "wheel").unwrap()[0].code,
+            "wheel_up"
+        );
+        assert!(
+            db.input_ranking("2026-10-11", None, "mouse")
+                .unwrap()
+                .iter()
+                .all(|row| row.code != "wheel_up")
+        );
     }
 
     #[test]

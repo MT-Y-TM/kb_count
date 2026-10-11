@@ -382,8 +382,13 @@ fn refresh_detail(
             .collect::<Vec<_>>()
             .join("  ")
     };
-    ui.set_heatmap_title("键盘热力图（当前日期，当前应用）".into());
-    set_heatmap(ui, &keys);
+    if detail.policy == CaptureMode::TotalsOnly {
+        ui.set_heatmap_title("键盘热力图：未记录详细数据".into());
+        set_heatmap(ui, &[]);
+    } else {
+        ui.set_heatmap_title("键盘热力图（当前日期，当前应用）".into());
+        set_heatmap(ui, &keys);
+    }
     let mouse_text = mouse
         .into_iter()
         .map(|row| format!("{}:{}", row.code, row.count))
@@ -425,11 +430,18 @@ fn main() -> anyhow::Result<()> {
     let _instance_mutex = unsafe {
         let mutex = CreateMutexW(None, false, w!("Global\\kb_count_single_instance"))?;
         if GetLastError().0 == 183 {
-            if let Ok(window) = FindWindowW(None, w!("kb_count"))
-                && !window.0.is_null()
-            {
-                let _ = ShowWindow(window, SW_RESTORE);
-                let _ = SetForegroundWindow(window);
+            // The first process creates the mutex before Slint creates its
+            // window. Wait briefly so an immediate second click can still
+            // activate the existing panel instead of silently returning.
+            for _ in 0..20 {
+                if let Ok(window) = FindWindowW(None, w!("kb_count"))
+                    && !window.0.is_null()
+                {
+                    let _ = ShowWindow(window, SW_RESTORE);
+                    let _ = SetForegroundWindow(window);
+                    break;
+                }
+                thread::sleep(Duration::from_millis(50));
             }
             return Ok(());
         }
@@ -455,7 +467,6 @@ fn main() -> anyhow::Result<()> {
     let enabled = Arc::new(AtomicBool::new(cfg.capture_enabled));
     let events = collector::start(Arc::clone(&enabled));
     let db_writer = Arc::clone(&db);
-    let writer_enabled = Arc::clone(&enabled);
     let data_generation = Arc::new(AtomicU64::new(0));
     let writer_generation = Arc::clone(&data_generation);
     let flush_seconds = cfg.flush_interval_seconds.max(1);
@@ -466,7 +477,6 @@ fn main() -> anyhow::Result<()> {
             let mut pending = Vec::<stats::event::InputEvent>::new();
             let flush = |events: &mpsc::Receiver<stats::event::InputEvent>,
                          db: &Arc<Mutex<storage::database::Database>>,
-                         enabled: &AtomicBool,
                          pending: &mut Vec<stats::event::InputEvent>| {
                 let mut aggregator = Aggregator::default();
                 let policies = db
@@ -478,9 +488,10 @@ fn main() -> anyhow::Result<()> {
                     let mode = CaptureMode::from_overrides(&event.app_path, &policies);
                     aggregator.record(event, mode);
                 }
-                if enabled.load(Ordering::Relaxed) {
-                    pending.extend(aggregator.drain());
-                }
+                // Pausing stops the collector from creating new events. Events
+                // already queued before the pause are still valid and must be
+                // persisted during the next flush or shutdown.
+                pending.extend(aggregator.drain());
                 if pending.is_empty() {
                     return;
                 }
@@ -504,7 +515,7 @@ fn main() -> anyhow::Result<()> {
             loop {
                 match writer_command_rx.recv_timeout(Duration::from_secs(flush_seconds)) {
                     Ok(WriterCommand::Shutdown(ack)) => {
-                        flush(&events, &db_writer, &writer_enabled, &mut pending);
+                        flush(&events, &db_writer, &mut pending);
                         let _ = ack.send(pending.is_empty());
                         break;
                     }
@@ -524,7 +535,7 @@ fn main() -> anyhow::Result<()> {
                         let _ = ack.send(result.is_ok());
                     }
                     Err(mpsc::RecvTimeoutError::Timeout) => {
-                        flush(&events, &db_writer, &writer_enabled, &mut pending);
+                        flush(&events, &db_writer, &mut pending);
                     }
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 }

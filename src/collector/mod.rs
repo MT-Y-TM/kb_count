@@ -51,6 +51,8 @@ mod raw_input {
     static PRESSED_KEYS: OnceLock<Mutex<HashSet<u32>>> = OnceLock::new();
     static WHEEL_REMAINDER: OnceLock<Mutex<HashMap<String, (i32, i32)>>> = OnceLock::new();
     static DROPPED_EVENTS: AtomicU64 = AtomicU64::new(0);
+    const RI_MOUSE_WHEEL: u16 = 0x0400;
+    const RI_MOUSE_HWHEEL: u16 = 0x0800;
 
     pub fn run(tx: SyncSender<InputEvent>, enabled: Arc<AtomicBool>) {
         let _ = SENDER.set(tx);
@@ -448,7 +450,10 @@ mod raw_input {
                 .usButtonData
                 .to_ne_bytes(),
         ));
-        for (flag, horizontal, code) in [(0x0100, false, "wheel"), (0x0200, true, "hwheel")] {
+        for (flag, horizontal, code) in [
+            (RI_MOUSE_WHEEL, false, "wheel"),
+            (RI_MOUSE_HWHEEL, true, "hwheel"),
+        ] {
             if flags & flag != 0 {
                 let units = normalize_wheel(&app_path, horizontal, delta);
                 if units != 0 {
@@ -456,7 +461,7 @@ mod raw_input {
                         date.clone(),
                         app_name.clone(),
                         app_path.clone(),
-                        "wheel",
+                        "mouse",
                         format!("{}_{}", code, if units > 0 { "up" } else { "down" }),
                         units.abs(),
                         0,
@@ -474,6 +479,7 @@ mod raw_input {
         use super::normalize_wheel;
         use super::reset_input_state;
         use super::should_count_keydown;
+        use super::{RI_MOUSE_HWHEEL, RI_MOUSE_WHEEL};
         use std::collections::HashSet;
 
         #[test]
@@ -503,6 +509,12 @@ mod raw_input {
             assert!(!should_count_keydown(&mut pressed, 42, true));
             pressed.remove(&42);
             assert!(should_count_keydown(&mut pressed, 42, true));
+        }
+
+        #[test]
+        fn raw_mouse_wheel_flags_match_win32_values() {
+            assert_eq!(RI_MOUSE_WHEEL, 0x0400);
+            assert_eq!(RI_MOUSE_HWHEEL, 0x0800);
         }
     }
 }

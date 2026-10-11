@@ -86,7 +86,7 @@ mod tests {
         export_range(&db, "2026-10-10", "2026-10-11", &path).expect("export");
         let text = std::fs::read_to_string(&path).expect("read export");
         let _ = std::fs::remove_file(path);
-        assert!(text.contains("2026-10-10,c:/a.exe,2,0,0"));
-        assert!(text.contains("2026-10-11,c:/a.exe,0,1,0"));
+        assert!(text.contains(r"2026-10-10,c:\a.exe,2,0,0"));
+        assert!(text.contains(r"2026-10-11,c:\a.exe,0,1,0"));
     }
 }
