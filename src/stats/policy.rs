@@ -23,6 +23,10 @@ impl CaptureMode {
     }
     pub fn for_application(path: &str) -> Self {
         let lower = normalize_app_path(path);
+        let executable_name = std::path::Path::new(&lower)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("");
         if [
             "chrome.exe",
             "msedge.exe",
@@ -30,8 +34,7 @@ impl CaptureMode {
             "brave.exe",
             "opera.exe",
         ]
-        .iter()
-        .any(|name| lower.ends_with(name))
+        .contains(&executable_name)
         {
             Self::TotalsOnly
         } else if [
@@ -40,8 +43,7 @@ impl CaptureMode {
             "1password.exe",
             "bitwarden.exe",
         ]
-        .iter()
-        .any(|name| lower.ends_with(name))
+        .contains(&executable_name)
         {
             Self::Excluded
         } else {
@@ -87,6 +89,10 @@ mod tests {
         assert_eq!(
             CaptureMode::for_application("C:/Apps/Chrome.EXE"),
             CaptureMode::TotalsOnly
+        );
+        assert_eq!(
+            CaptureMode::for_application("C:/Apps/NotChrome.EXE"),
+            CaptureMode::Detailed
         );
         assert_eq!(
             normalize_app_path(r"\\?\C:/Apps/Editor.EXE"),
