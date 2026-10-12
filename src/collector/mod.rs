@@ -31,8 +31,9 @@ mod raw_input {
     };
     use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
     use windows::Win32::UI::Input::{
-        GetRawInputData, RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER, RID_INPUT, RIDEV_DEVNOTIFY,
-        RIDEV_INPUTSINK, RIM_TYPEKEYBOARD, RIM_TYPEMOUSE, RegisterRawInputDevices,
+        GetRawInputData, RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER, RAWKEYBOARD, RAWMOUSE,
+        RID_INPUT, RIDEV_DEVNOTIFY, RIDEV_INPUTSINK, RIM_TYPEKEYBOARD, RIM_TYPEMOUSE,
+        RegisterRawInputDevices,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         CS_HREDRAW, CS_VREDRAW, CallNextHookEx, CreateWindowExW, DefWindowProcW, DispatchMessageW,
@@ -493,12 +494,20 @@ mod raw_input {
             || read_size == 0
             || read_size > capacity
             || size < std::mem::size_of::<RAWINPUTHEADER>() as u32
+            || size != read_size
         {
             RAW_INPUT_DATA_ERRORS.fetch_add(1, Ordering::Relaxed);
             return;
         }
         let date = Local::now().format("%Y-%m-%d").to_string();
         if raw.header.dwType == RIM_TYPEKEYBOARD.0 {
+            let minimum = std::mem::size_of::<RAWINPUTHEADER>()
+                .saturating_add(std::mem::size_of::<RAWKEYBOARD>())
+                as u32;
+            if read_size < minimum {
+                RAW_INPUT_DATA_ERRORS.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
             if !USE_RAW_KEYBOARD.load(Ordering::Acquire) {
                 return;
             }
@@ -538,6 +547,12 @@ mod raw_input {
             return;
         }
         if raw.header.dwType != RIM_TYPEMOUSE.0 {
+            return;
+        }
+        let minimum = std::mem::size_of::<RAWINPUTHEADER>()
+            .saturating_add(std::mem::size_of::<RAWMOUSE>()) as u32;
+        if read_size < minimum {
+            RAW_INPUT_DATA_ERRORS.fetch_add(1, Ordering::Relaxed);
             return;
         }
         RAW_MOUSE_PACKETS.fetch_add(1, Ordering::Relaxed);
