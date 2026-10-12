@@ -76,7 +76,7 @@ INFO kb_count::collector::raw_input: mouse input diagnostic summary raw_input_me
 
 ## 本机 Release 资源实测
 
-测试环境为 Windows 11 专业工作站版 10.0.26200，后台隐藏运行 10 秒、无输入，使用 PowerShell `Get-Process` 每秒采样：私有内存约 32.21–32.34 MiB，工作集约 82.12–82.25 MiB，平均 CPU 约 0.04%；打开统计窗口后短时采样约 32.01–32.14 MiB、81.87–81.99 MiB，平均 CPU 约 0.07%。当前 Release EXE 约 11.38 MiB。该结果只代表本机短时测试，不是所有 Windows 10/11 设备的性能承诺。
+测试环境为 Windows 11 专业工作站版 10.0.26200、16 个逻辑处理器，使用当前 Release 在无输入状态下预热 3 秒后用 PowerShell 每秒采样 10 秒。后台隐藏运行时，私有内存平均 69.95 MiB（69.89–70.53 MiB），工作集平均 65.91 MiB（65.90–65.91 MiB），按进程 CPU 时间折算的全机平均 CPU 约 0.0386%。打开统计窗口后采样 10 秒，私有内存平均 69.70 MiB，工作集平均 65.93 MiB，全机平均 CPU 约 0.0097%。当前 Release EXE 约 11.38 MiB。该结果只代表本机短时测试，不是所有 Windows 10/11 设备的性能承诺。
 
 
 
