@@ -68,6 +68,8 @@ INFO kb_count::collector::raw_input: mouse input diagnostic summary raw_input_me
 键盘和鼠标分别只记录一次首事件诊断日志；日志不包含按键代码、输入内容、坐标或窗口标题。
 鼠标诊断汇总每 10 秒输出一次，仅包含阶段计数；`raw_mouse_packets=0` 表示尚未收到鼠标 Raw Input，`mouse_events_enqueued` 则表示已进入统计队列。
 
+实体鼠标验收可在普通桌面应用中依次执行左键、右键、中键、XButton1、XButton2、垂直滚轮和水平滚轮（设备支持时）。等待一次 10 秒诊断输出并再等待默认 5 秒批量写入：按钮动作应使 `mouse_button_packets` 和 `mouse_events_enqueued` 增加，垂直/水平滚轮应使 `mouse_wheel_packets` 增加并在明细中出现 `wheel_up/down` 或 `hwheel_up/down`。鼠标移动只会增加 `raw_mouse_packets`，不会产生数据库统计行。
+
 最新版本默认过滤该 fontdb 字体扫描警告。请确认运行的是最新 `target/release/kb_count.exe`，并检查日志中的 `data_dir` 与 `stats.db` 是否在同一目录。统计默认每 5 秒批量写入数据库。
 
 输入采集会忽略带有 `LLKHF_INJECTED` 标记的模拟键盘事件，因此 PowerShell `SendInput`、自动化工具等不会被当作真实用户输入；请用实体键盘和鼠标验证。托盘退出会先请求统计线程完成最后一次 Flush，再关闭数据库。
