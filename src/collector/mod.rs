@@ -458,6 +458,11 @@ mod raw_input {
         i32::from(i16::from_ne_bytes(button_data.to_ne_bytes()))
     }
 
+    fn raw_payload_has_minimum(read_size: u32, payload_size: usize) -> bool {
+        read_size
+            >= (std::mem::size_of::<RAWINPUTHEADER>() as u32).saturating_add(payload_size as u32)
+    }
+
     fn should_count_keydown(
         pressed: &mut HashSet<u32>,
         key_id: u32,
@@ -501,10 +506,7 @@ mod raw_input {
         }
         let date = Local::now().format("%Y-%m-%d").to_string();
         if raw.header.dwType == RIM_TYPEKEYBOARD.0 {
-            let minimum = std::mem::size_of::<RAWINPUTHEADER>()
-                .saturating_add(std::mem::size_of::<RAWKEYBOARD>())
-                as u32;
-            if read_size < minimum {
+            if !raw_payload_has_minimum(read_size, std::mem::size_of::<RAWKEYBOARD>()) {
                 RAW_INPUT_DATA_ERRORS.fetch_add(1, Ordering::Relaxed);
                 return;
             }
@@ -549,9 +551,7 @@ mod raw_input {
         if raw.header.dwType != RIM_TYPEMOUSE.0 {
             return;
         }
-        let minimum = std::mem::size_of::<RAWINPUTHEADER>()
-            .saturating_add(std::mem::size_of::<RAWMOUSE>()) as u32;
-        if read_size < minimum {
+        if !raw_payload_has_minimum(read_size, std::mem::size_of::<RAWMOUSE>()) {
             RAW_INPUT_DATA_ERRORS.fetch_add(1, Ordering::Relaxed);
             return;
         }
@@ -611,6 +611,7 @@ mod raw_input {
         use super::mouse_button_codes;
         use super::normalize_delta;
         use super::normalize_wheel;
+        use super::raw_payload_has_minimum;
         use super::reset_input_state;
         use super::should_count_keydown;
         use super::signed_wheel_delta;
@@ -618,6 +619,20 @@ mod raw_input {
             RI_MOUSE_BUTTON_4_DOWN, RI_MOUSE_BUTTON_5_DOWN, RI_MOUSE_HWHEEL, RI_MOUSE_WHEEL,
         };
         use std::collections::HashSet;
+
+        #[test]
+        fn raw_input_payload_length_rejects_truncated_packets() {
+            let mouse_payload = std::mem::size_of::<super::RAWMOUSE>();
+            let header = std::mem::size_of::<super::RAWINPUTHEADER>() as u32;
+            assert!(!raw_payload_has_minimum(
+                header + mouse_payload as u32 - 1,
+                mouse_payload
+            ));
+            assert!(raw_payload_has_minimum(
+                header + mouse_payload as u32,
+                mouse_payload
+            ));
+        }
 
         #[test]
         fn high_precision_wheel_accumulates_until_one_detent() {
