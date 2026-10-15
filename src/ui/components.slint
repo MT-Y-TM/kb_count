@@ -14,7 +14,9 @@ export struct AppRow {
     keyboard: string,
     mouse: string,
     wheel: string,
+    total: string,
     share: float,
+    share_text: string,
 }
 
 export struct InputRow { label: string, count: string, share: float }
@@ -55,7 +57,7 @@ export component MetricCard inherits Rectangle {
     in property <string> caption;
     in property <color> accent: #4c7fe5;
     in property <bool> dark;
-    height: 112px;
+    height: 104px;
     border-radius: 10px;
     border-width: 1px;
     border-color: dark ? #303c50 : #e5eaf2;
@@ -75,34 +77,43 @@ export component MetricCard inherits Rectangle {
 export component AppListRow inherits Rectangle {
     in property <AppRow> item;
     in property <bool> dark;
+    in property <int> sort-mode;
     callback selected(string);
-    height: 70px;
+    height: 64px;
     border-width: focus.has-focus ? 1px : 0px;
     border-color: #6b95e8;
     background: touch.has-hover ? (dark ? #253249 : #f2f6fd) : transparent;
     accessible-role: button;
-    accessible-label: item.name + "，键盘 " + item.keyboard + "，鼠标 " + item.mouse;
+    accessible-label: item.name + "，总输入 " + item.total + "，键盘 " + item.keyboard + "，鼠标 " + item.mouse + "，占比 " + item.share-text;
     accessible-action-default => { root.selected(root.item.path); }
     forward-focus: focus;
     HorizontalLayout {
         padding-left: 16px; padding-right: 16px; spacing: 12px;
         Text { width: 20px; text: root.item.rank; color: root.dark ? #8494ae : #96a1b2; font-size: 12px; vertical-alignment: center; }
         Rectangle {
-            width: 32px; height: 70px;
+            width: 32px; height: 64px;
             Rectangle {
-                y: 19px; width: 32px; height: 32px; border-radius: 8px; background: root.dark ? #304465 : #eaf0fc;
+                y: 16px; width: 32px; height: 32px; border-radius: 8px; background: root.dark ? #304465 : #eaf0fc;
                 Text { text: root.item.initial; color: root.dark ? #adcbff : #5174b3; font-size: 14px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
             }
         }
         VerticalLayout {
-            spacing: 5px; padding-top: 12px; padding-bottom: 12px;
+            spacing: 3px; padding-top: 8px; padding-bottom: 8px;
             Text { text: root.item.name; color: root.dark ? #e5ecf7 : #2d3b53; font-size: 13px; font-weight: 600; overflow: elide; }
             Text { text: root.item.path; color: root.dark ? #9cabc2 : #74849d; font-size: 11px; overflow: elide; }
-            Rectangle { height: 3px; border-radius: 2px; background: root.dark ? #2b374c : #edf1f8; Rectangle { x: 0px; y: 0px; width: parent.width * root.item.share; height: parent.height; border-radius: 2px; background: #7098e8; } }
+            HorizontalLayout { height: 12px; spacing: 8px;
+                Rectangle {
+                    Rectangle { x: 0px; y: 4px; height: 3px; width: parent.width; border-radius: 2px; background: root.dark ? #2b374c : #edf1f8;
+                        Rectangle { x: 0px; y: 0px; width: parent.width * root.item.share; height: parent.height; border-radius: 2px; background: #7098e8; }
+                    }
+                }
+                Text { width: 42px; text: root.item.share-text; color: root.dark ? #9aadc9 : #74849d; font-size: 9px; horizontal-alignment: right; vertical-alignment: center; }
+            }
         }
-        Text { width: 72px; text: root.item.keyboard; color: root.dark ? #c8d5e9 : #445570; horizontal-alignment: right; vertical-alignment: center; font-size: 13px; }
-        Text { width: 64px; text: root.item.mouse; color: root.dark ? #c8d5e9 : #445570; horizontal-alignment: right; vertical-alignment: center; font-size: 13px; }
+        Text { width: 72px; text: root.item.keyboard; color: root.sort-mode == 1 ? (root.dark ? #a9c9ff : #3466b7) : (root.dark ? #c8d5e9 : #445570); font-weight: root.sort-mode == 1 ? 600 : 400; horizontal-alignment: right; vertical-alignment: center; font-size: 13px; }
+        Text { width: 64px; text: root.item.mouse; color: root.sort-mode == 2 ? (root.dark ? #a9c9ff : #3466b7) : (root.dark ? #c8d5e9 : #445570); font-weight: root.sort-mode == 2 ? 600 : 400; horizontal-alignment: right; vertical-alignment: center; font-size: 13px; }
         Text { width: 64px; text: root.item.wheel; color: root.dark ? #c8d5e9 : #445570; horizontal-alignment: right; vertical-alignment: center; font-size: 13px; }
+        Text { width: 82px; text: root.item.total; color: root.sort-mode == 0 ? (root.dark ? #a9c9ff : #3466b7) : (root.dark ? #d9e5f6 : #354a68); font-weight: 600; horizontal-alignment: right; vertical-alignment: center; font-size: 13px; }
     }
     Rectangle { y: parent.height - 1px; height: 1px; background: root.dark ? #2c374b : #eff2f7; }
     focus := FocusScope {

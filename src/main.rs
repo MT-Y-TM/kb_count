@@ -11,7 +11,7 @@ use crate::stats::aggregator::Aggregator;
 use crate::stats::policy::CaptureMode;
 use anyhow::Context;
 use chrono::Local;
-use slint::{CloseRequestResponse, Timer, TimerMode};
+use slint::{CloseRequestResponse, Model, Timer, TimerMode};
 use std::path::PathBuf;
 use std::sync::{
     Arc, Mutex,
@@ -325,6 +325,40 @@ fn input_rows(rows: &[storage::database::KeyTotal]) -> Vec<InputRow> {
         .collect()
 }
 
+fn filter_app_rows(ui: &MainWindow) {
+    let all = ui.get_all_app_rows();
+    let query = ui.get_app_search().trim().to_lowercase().replace('/', "\\");
+    let visible = if query.is_empty() {
+        all.clone()
+    } else {
+        all.iter()
+            .filter(|row| {
+                row.name.to_lowercase().contains(&query) || row.path.to_lowercase().contains(&query)
+            })
+            .collect::<Vec<_>>()
+            .as_slice()
+            .into()
+    };
+    ui.set_ranking_result(
+        if query.is_empty() {
+            format!("{} 个应用", all.row_count())
+        } else {
+            format!("匹配 {} / {} 个应用", visible.row_count(), all.row_count())
+        }
+        .into(),
+    );
+    ui.set_app_rows(visible);
+}
+
+fn bind_app_search(ui: &MainWindow) {
+    let weak = ui.as_weak();
+    ui.on_app_search_changed(move || {
+        if let Some(ui) = weak.upgrade() {
+            filter_app_rows(&ui);
+        }
+    });
+}
+
 fn refresh_heatmap(
     ui: &MainWindow,
     database: &storage::database::Database,
@@ -399,6 +433,10 @@ fn refresh_overview(
         .enumerate()
         .map(|(index, row)| {
             let share = metric(&row) as f32 / sum;
+            let total = row
+                .keyboard
+                .saturating_add(row.mouse)
+                .saturating_add(row.wheel.saturating_abs());
             AppRow {
                 rank: (index + 1) as i32,
                 initial: row
@@ -414,11 +452,26 @@ fn refresh_overview(
                 keyboard: format_count(row.keyboard).into(),
                 mouse: format_count(row.mouse).into(),
                 wheel: format_count(row.wheel).into(),
+                total: format_count(total).into(),
                 share: share.clamp(0.0, 1.0),
+                share_text: if share > 0.0 && share < 0.001 {
+                    "<0.1%".into()
+                } else {
+                    format!("{:.1}%", share * 100.0).into()
+                },
             }
         })
         .collect::<Vec<_>>();
-    ui.set_app_rows(rows.as_slice().into());
+    ui.set_all_app_rows(rows.as_slice().into());
+    filter_app_rows(ui);
+    ui.set_ranking_share_label(
+        match sort {
+            RankingSort::Total => "总输入占比",
+            RankingSort::Keyboard => "键盘占比",
+            RankingSort::Mouse => "点击占比",
+        }
+        .into(),
+    );
     ui.set_ranking_sort(match sort {
         RankingSort::Total => 0,
         RankingSort::Keyboard => 1,
@@ -554,6 +607,7 @@ fn run() -> anyhow::Result<()> {
     // Slint's Windows backend may register the mouse Raw Input device while
     // constructing its window. The collector must register its own HWND last.
     let ui = MainWindow::new()?;
+    bind_app_search(&ui);
     ui.window()
         .on_close_requested(|| CloseRequestResponse::HideWindow);
     let enabled = Arc::new(AtomicBool::new(cfg.capture_enabled));

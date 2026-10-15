@@ -71,6 +71,7 @@ fn verify_ui_state() {
     slint::platform::set_platform(Box::new(PreviewPlatform(window.clone())))
         .expect("preview backend");
     let ui = MainWindow::new().expect("UI");
+    bind_app_search(&ui);
     window.set_size(slint::PhysicalSize::new(1060, 780));
     let mut db = storage::database::Database::open(std::path::Path::new(":memory:")).unwrap();
     let date = "2026-10-15";
@@ -84,7 +85,7 @@ fn verify_ui_state() {
         "Mail.exe",
         "Files.exe",
         "Reader.exe",
-        "Tools.exe",
+        "ToolsWithAnIntentionallyLongExecutableName.exe",
     ]
     .iter()
     .enumerate()
@@ -115,6 +116,18 @@ fn verify_ui_state() {
                 wheel_units: 0,
                 detailed: true,
             },
+            stats::event::InputEvent {
+                local_date: date.into(),
+                app_name: (*name).into(),
+                app_path: format!("C:/Preview/{name}"),
+                input_type: "mouse".into(),
+                code: "wheel_up".into(),
+                count: 120 / (index as i64 + 1),
+                keyboard_count: 0,
+                mouse_count: 0,
+                wheel_units: 120 / (index as i64 + 1),
+                detailed: true,
+            },
         ])
         .unwrap();
     }
@@ -135,6 +148,32 @@ fn verify_ui_state() {
     assert_eq!(ui.get_export_from_date(), "2026-10-01");
     assert_eq!(ui.get_export_to_date(), date);
     assert_eq!(ui.get_app_rows().row_count(), 10);
+    let original_terminal = ui.get_app_rows().row_data(1).unwrap();
+    assert_eq!(ui.get_app_rows().row_data(0).unwrap().total, "13,790");
+    let daily_keyboard = ui.get_keyboard_text();
+    ui.set_app_search("  TeRmiNaL  ".into());
+    slint::platform::update_timers_and_animations();
+    assert_eq!(ui.get_app_rows().row_count(), 1);
+    let filtered = ui.get_app_rows().row_data(0).unwrap();
+    assert_eq!(filtered.rank, 2, "search preserves the daily rank");
+    assert_eq!(filtered.total, "6,895", "total includes wheel units");
+    assert_eq!(
+        filtered.share, original_terminal.share,
+        "search preserves the daily denominator"
+    );
+    assert_eq!(ui.get_keyboard_text(), daily_keyboard);
+    assert_eq!(ui.get_app_text(), "10");
+    refresh_overview(&ui, &db, date, RankingSort::Total).unwrap();
+    assert_eq!(ui.get_app_rows().row_count(), 1, "refresh preserves search");
+    ui.set_app_search("C:/Preview/TER".into());
+    slint::platform::update_timers_and_animations();
+    assert_eq!(
+        ui.get_app_rows().row_count(),
+        1,
+        "search accepts Windows path separators and case"
+    );
+    ui.set_app_search("".into());
+    slint::platform::update_timers_and_animations();
     refresh_detail(&ui, &db, date, "C:/Preview/Editor.exe").unwrap();
     ui.set_app_query_path("C:/Unsubmitted/".into());
     ui.set_heatmap_scope(1);
@@ -165,7 +204,7 @@ fn verify_ui_state() {
         let selected = selected.clone();
         move |path| *selected.borrow_mut() = path.to_string()
     });
-    click(370.0, 410.0);
+    click(370.0, 431.0);
     assert_eq!(ui.get_selected_page(), 2, "application row opens details");
     assert_eq!(selected.borrow().as_str(), r"c:\preview\editor.exe");
     for dark in [false, true] {
@@ -191,6 +230,19 @@ fn verify_ui_state() {
             );
         }
     }
+    ui.set_selected_page(0);
+    ui.set_app_search("terminal".into());
+    slint::platform::update_timers_and_animations();
+    save_preview(&window, "search-filtered");
+    ui.set_app_search("no-matching-application".into());
+    slint::platform::update_timers_and_animations();
+    assert_eq!(ui.get_app_rows().row_count(), 0);
+    assert_eq!(ui.get_all_app_rows().row_count(), 10);
+    assert_eq!(ui.get_ranking_result(), "匹配 0 / 10 个应用");
+    save_preview(&window, "search-no-match");
+    ui.set_app_search("".into());
+    slint::platform::update_timers_and_animations();
+    assert_eq!(ui.get_app_rows().row_count(), 10);
     window.set_size(slint::PhysicalSize::new(960, 680));
     ui.set_selected_page(0);
     save_preview(&window, "dark-minimum");
