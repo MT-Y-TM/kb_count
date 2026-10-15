@@ -38,7 +38,7 @@ cargo test --locked
 cargo build --release --locked
 ```
 
-发布产物为 `target/release/kb_count.exe`。将 EXE 复制到具有写入权限的目录后运行，配置、数据库、CSV 导出文件均位于 EXE 同级目录，不使用 AppData。
+发布产物为 `target/release/kb_count.exe`。将 EXE 复制到具有写入权限的目录后运行，配置和数据库位于 EXE 同级目录，不使用 AppData；CSV 仅在用户主动导出时保存到所选位置。
 
 ## 运行
 
