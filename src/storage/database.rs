@@ -297,6 +297,7 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stats::aggregator::Aggregator;
 
     #[test]
     fn schema_migration_initializes_version_one() {
@@ -468,6 +469,58 @@ mod tests {
                 .iter()
                 .all(|row| row.code != "wheel_up")
         );
+    }
+
+    #[test]
+    fn mouse_categories_reach_sqlite_and_queries_with_unknown_attribution() {
+        let mut aggregator = Aggregator::default();
+        for code in ["left", "right", "middle", "x1", "x2"] {
+            aggregator.record(
+                InputEvent {
+                    local_date: "2026-10-15".into(),
+                    app_name: "Unknown".into(),
+                    app_path: "Unknown".into(),
+                    input_type: "mouse".into(),
+                    code: code.into(),
+                    count: 1,
+                    keyboard_count: 0,
+                    mouse_count: 1,
+                    wheel_units: 0,
+                    detailed: true,
+                },
+                CaptureMode::Detailed,
+            );
+        }
+        for code in ["wheel_down", "hwheel_up"] {
+            aggregator.record(
+                InputEvent {
+                    local_date: "2026-10-15".into(),
+                    app_name: "Unknown".into(),
+                    app_path: "Unknown".into(),
+                    input_type: "mouse".into(),
+                    code: code.into(),
+                    count: 1,
+                    keyboard_count: 0,
+                    mouse_count: 0,
+                    wheel_units: 1,
+                    detailed: true,
+                },
+                CaptureMode::Detailed,
+            );
+        }
+        let mut db = Database::open(Path::new(":memory:")).expect("database");
+        db.record_batch(&aggregator.drain()).expect("record batch");
+        assert_eq!(db.totals("2026-10-15").unwrap(), (0, 5, 2, 1));
+        let buttons = db
+            .input_ranking("2026-10-15", Some("Unknown"), "mouse")
+            .unwrap();
+        let wheels = db
+            .input_ranking("2026-10-15", Some("Unknown"), "wheel")
+            .unwrap();
+        assert_eq!(buttons.len(), 5);
+        assert_eq!(wheels.len(), 2);
+        assert!(buttons.iter().all(|row| row.count == 1));
+        assert!(wheels.iter().all(|row| row.count == 1));
     }
 
     #[test]
