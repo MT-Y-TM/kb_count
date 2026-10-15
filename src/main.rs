@@ -1,4 +1,5 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+mod app_icons;
 mod collector;
 mod config;
 mod stats;
@@ -329,17 +330,21 @@ fn input_rows(rows: &[storage::database::KeyTotal]) -> Vec<InputRow> {
 fn filter_app_rows(ui: &MainWindow) {
     let all = ui.get_all_app_rows();
     let query = ui.get_app_search().trim().to_lowercase().replace('/', "\\");
-    let visible = if query.is_empty() {
-        all.clone()
-    } else {
-        all.iter()
-            .filter(|row| {
-                row.name.to_lowercase().contains(&query) || row.path.to_lowercase().contains(&query)
-            })
-            .collect::<Vec<_>>()
-            .as_slice()
-            .into()
-    };
+    let visible: slint::ModelRc<AppRow> = all
+        .iter()
+        .filter(|row| {
+            query.is_empty()
+                || row.name.to_lowercase().contains(&query)
+                || row.path.to_lowercase().contains(&query)
+        })
+        .map(|mut row| {
+            row.icon = app_icons::cached(row.path.as_str());
+            row.has_icon = row.icon.size().width > 0;
+            row
+        })
+        .collect::<Vec<_>>()
+        .as_slice()
+        .into();
     ui.set_ranking_result(
         if query.is_empty() {
             format!("{} 个应用", all.row_count())
@@ -349,6 +354,7 @@ fn filter_app_rows(ui: &MainWindow) {
         .into(),
     );
     ui.set_app_rows(visible);
+    app_icons::populate(ui);
 }
 
 fn bind_app_search(ui: &MainWindow) {
@@ -439,6 +445,8 @@ fn refresh_overview(
                 .saturating_add(row.mouse)
                 .saturating_add(row.wheel.saturating_abs());
             AppRow {
+                icon: slint::Image::default(),
+                has_icon: false,
                 rank: (index + 1) as i32,
                 initial: row
                     .app_name
@@ -513,6 +521,19 @@ fn refresh_detail(
         mouse.sort_by(|left, right| right.count.cmp(&left.count));
     }
     ui.set_detail_loaded(true);
+    let icon = app_icons::cached(&detail.app_path);
+    ui.set_detail_has_icon(icon.size().width > 0);
+    ui.set_detail_icon(icon);
+    ui.set_detail_initial(
+        detail
+            .app_name
+            .chars()
+            .next()
+            .unwrap_or('?')
+            .to_uppercase()
+            .to_string()
+            .into(),
+    );
     ui.set_detail_name(detail.app_name.into());
     ui.set_detail_path(detail.app_path.into());
     ui.set_detail_keyboard(format_count(detail.keyboard).into());
@@ -541,6 +562,7 @@ fn refresh_detail(
     ui.set_detail_key_rows(input_rows(&keys).as_slice().into());
     ui.set_detail_mouse_rows(input_rows(&mouse).as_slice().into());
     ui.set_detail_text("".into());
+    app_icons::populate(ui);
     Ok(())
 }
 fn main() {
@@ -1148,6 +1170,7 @@ fn run() -> anyhow::Result<()> {
                     }
                     let _ = ui.show();
                     ui.window().set_minimized(false);
+                    app_icons::populate(&ui);
                     #[cfg(windows)]
                     ui_window::fit_to_work_area(ui.window());
                 }

@@ -5,11 +5,27 @@ use slint::platform::{Platform, PlatformError, WindowAdapter};
 use std::io::Write;
 use std::rc::Rc;
 
-struct PreviewPlatform(Rc<MinimalSoftwareWindow>);
+type UiEvent = Box<dyn FnOnce() + Send>;
+struct PreviewPlatform(Rc<MinimalSoftwareWindow>, mpsc::SyncSender<UiEvent>);
+struct PreviewProxy(mpsc::SyncSender<UiEvent>);
+
+impl slint::platform::EventLoopProxy for PreviewProxy {
+    fn quit_event_loop(&self) -> Result<(), slint::EventLoopError> {
+        Ok(())
+    }
+    fn invoke_from_event_loop(&self, event: UiEvent) -> Result<(), slint::EventLoopError> {
+        self.0
+            .try_send(event)
+            .map_err(|_| slint::EventLoopError::EventLoopTerminated)
+    }
+}
 
 impl Platform for PreviewPlatform {
     fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, PlatformError> {
         Ok(self.0.clone())
+    }
+    fn new_event_loop_proxy(&self) -> Option<Box<dyn slint::platform::EventLoopProxy>> {
+        Some(Box::new(PreviewProxy(self.1.clone())))
     }
 }
 
@@ -68,7 +84,8 @@ fn refresh_preserves_ui_filters_and_privacy_state() {
 
 fn verify_ui_state() {
     let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
-    slint::platform::set_platform(Box::new(PreviewPlatform(window.clone())))
+    let (event_sender, event_receiver) = mpsc::sync_channel::<UiEvent>(64);
+    slint::platform::set_platform(Box::new(PreviewPlatform(window.clone(), event_sender)))
         .expect("preview backend");
     let ui = MainWindow::new().expect("UI");
     bind_app_search(&ui);
@@ -325,6 +342,92 @@ fn verify_ui_state() {
     ui.set_selected_page(0);
     save_preview(&window, "empty");
     assert_eq!(ui.get_app_rows().row_count(), 0);
+    #[cfg(windows)]
+    {
+        // The aggregates remain test data; only the embedded icons come from
+        // actual local Windows executables. No program is launched.
+        let system = std::env::var("SystemRoot").unwrap();
+        let paths = [
+            format!(r"{system}\System32\WindowsPowerShell\v1.0\powershell.exe"),
+            format!(r"{system}\explorer.exe"),
+            format!(r"{system}\System32\notepad.exe"),
+        ];
+        for (index, path) in paths.iter().enumerate() {
+            for (code, divisor) in [("1e", 1), ("1f", 2), ("20", 4), ("21", 20)] {
+                let count = 12_345 / ((index as i64 + 1) * divisor);
+                db.record_batch(&[stats::event::InputEvent {
+                    local_date: date.into(),
+                    app_name: path.rsplit('\\').next().unwrap().into(),
+                    app_path: path.clone(),
+                    input_type: "keyboard".into(),
+                    code: format!("scan:{code}:ext:false"),
+                    count,
+                    keyboard_count: count,
+                    mouse_count: 0,
+                    wheel_units: 0,
+                    detailed: true,
+                }])
+                .unwrap();
+            }
+        }
+        refresh_overview(&ui, &db, date, RankingSort::Total).unwrap();
+        let end = std::time::Instant::now() + Duration::from_secs(5);
+        while app_icons::pending_count() > 0 {
+            let remaining = end.saturating_duration_since(std::time::Instant::now());
+            let event = event_receiver
+                .recv_timeout(remaining)
+                .expect("icon worker completion");
+            event();
+        }
+        assert_eq!(ui.get_app_rows().row_data(0).unwrap().icon.size().width, 64);
+        ui.set_app_search("PowerShell".into());
+        slint::platform::update_timers_and_animations();
+        assert!(
+            ui.get_app_rows().row_data(0).unwrap().has_icon,
+            "search retains cached icon"
+        );
+        ui.set_app_search("".into());
+        slint::platform::update_timers_and_animations();
+        refresh_detail(&ui, &db, date, &paths[0]).unwrap();
+        assert!(ui.get_detail_has_icon(), "details reuse the cached icon");
+        for (label, scale) in [("100", 1.0), ("125", 1.25), ("150", 1.5)] {
+            window
+                .window()
+                .dispatch_event(slint::platform::WindowEvent::ScaleFactorChanged {
+                    scale_factor: scale,
+                });
+            window.set_size(slint::PhysicalSize::new(1280, 720));
+            for page in [0, 2] {
+                ui.set_selected_page(page);
+                save_preview(&window, &format!("icons-{label}-{page}"));
+            }
+        }
+        ui.set_dark_mode(false);
+        ui.set_theme_text("主题：浅色".into());
+        slint::platform::update_timers_and_animations();
+        if std::env::var_os("KB_COUNT_RENDER_UI").is_some() {
+            thread::sleep(Duration::from_millis(250));
+        }
+        ui.set_selected_page(0);
+        save_preview(&window, "icons-light-150");
+        refresh_heatmap(&ui, &db, date).unwrap();
+        ui.set_selected_page(1);
+        save_preview(&window, "heatmap-readable-150");
+        assert!(
+            ui.get_all_app_rows().iter().all(|row| !row.has_icon),
+            "the base model does not retain a second icon cache"
+        );
+        ui.hide().unwrap();
+        let mut row = ui.get_app_rows().row_data(0).unwrap();
+        row.path = r"C:\NotYetRequested\app.exe".into();
+        ui.set_app_rows([row].as_slice().into());
+        app_icons::populate(&ui);
+        assert_eq!(
+            app_icons::pending_count(),
+            0,
+            "hidden panels do not request icons"
+        );
+    }
     ui.hide().unwrap();
 }
 

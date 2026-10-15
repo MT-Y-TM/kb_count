@@ -7,6 +7,8 @@ export component ActionButton inherits Button {
 }
 
 export struct AppRow {
+    icon: image,
+    has_icon: bool,
     rank: int,
     name: string,
     initial: string,
@@ -21,6 +23,18 @@ export struct AppRow {
 
 export struct InputRow { label: string, count: string, share: float }
 export struct HeatCell { label: string, count: int }
+
+export component AppIcon inherits Rectangle {
+    in property <image> source;
+    in property <bool> available;
+    in property <string> initial;
+    in property <bool> dark;
+    width: 32px; height: 32px;
+    border-radius: 8px;
+    background: available ? transparent : dark ? #304465 : #eaf0fc;
+    if root.available: Image { x: 0px; y: 0px; width: 100%; height: 100%; source: root.source; image-fit: contain; }
+    if !root.available: Text { text: root.initial; color: root.dark ? #adcbff : #5174b3; font-size: 16px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+}
 
 export component NavItem inherits Rectangle {
     in property <string> label;
@@ -40,7 +54,7 @@ export component NavItem inherits Rectangle {
     forward-focus: focus;
     HorizontalLayout {
         padding-left: root.compact ? 10px : 14px; padding-right: 12px; spacing: 12px;
-        if !root.compact: Text { text: root.index; width: 20px; color: root.selected ? #5489ee : (root.dark ? #8796af : #929eb0); font-size: 11px; vertical-alignment: center; }
+        if !root.compact: Text { text: root.index; width: 20px; color: root.selected ? #5489ee : (root.dark ? #8796af : #929eb0); font-size: 12px; vertical-alignment: center; }
         Text { text: root.label; color: root.selected ? (root.dark ? #a9c9ff : #2458b8) : (root.dark ? #c4cede : #526075); font-size: 14px; font-weight: root.selected ? 600 : 400; vertical-alignment: center; }
     }
     focus := FocusScope {
@@ -72,7 +86,7 @@ export component MetricCard inherits Rectangle {
             Rectangle { width: 6px; height: 6px; border-radius: 3px; background: root.accent; }
         }
         Text { text: root.value; color: root.dark ? #f0f4fb : #1d2b43; font-size: root.compact ? 26px : 30px; font-weight: 600; overflow: elide; }
-        if !root.compact: Text { text: root.caption; color: root.dark ? #8190a8 : #94a0b1; font-size: 10px; }
+        if !root.compact: Text { text: root.caption; color: root.dark ? #8190a8 : #94a0b1; font-size: 11px; }
     }
 }
 
@@ -82,7 +96,7 @@ export component AppListRow inherits Rectangle {
     in property <int> sort-mode;
     in property <bool> compact;
     callback selected(string);
-    height: 64px;
+    height: root.compact ? 68px : 72px;
     border-width: focus.has-focus ? 1px : 0px;
     border-color: #6b95e8;
     background: touch.has-hover ? (dark ? #253249 : #f2f6fd) : transparent;
@@ -92,25 +106,22 @@ export component AppListRow inherits Rectangle {
     forward-focus: focus;
     HorizontalLayout {
         padding-left: 16px; padding-right: 16px; spacing: root.compact ? 8px : 12px;
-        Text { width: 20px; text: root.item.rank; color: root.dark ? #8494ae : #96a1b2; font-size: 12px; vertical-alignment: center; }
+        Text { width: 20px; text: root.item.rank; color: root.dark ? #aab9d0 : #5f708a; font-size: 12px; vertical-alignment: center; }
         Rectangle {
-            width: 32px; height: 64px;
-            Rectangle {
-                y: 16px; width: 32px; height: 32px; border-radius: 8px; background: root.dark ? #304465 : #eaf0fc;
-                Text { text: root.item.initial; color: root.dark ? #adcbff : #5174b3; font-size: 14px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
-            }
+            width: 32px; height: root.compact ? 68px : 72px;
+            AppIcon { y: (root.height - 32px) / 2; source: root.item.icon; available: root.item.has_icon; initial: root.item.initial; dark: root.dark; }
         }
         VerticalLayout {
-            spacing: 3px; padding-top: 8px; padding-bottom: 8px;
+            spacing: 3px; padding-top: 6px; padding-bottom: 6px;
             Text { text: root.item.name; color: root.dark ? #e5ecf7 : #2d3b53; font-size: 13px; font-weight: 600; overflow: elide; }
-            Text { text: root.item.path; color: root.dark ? #9cabc2 : #74849d; font-size: 11px; overflow: elide; }
-            HorizontalLayout { height: 12px; spacing: 8px;
+            Text { text: root.item.path; color: root.dark ? #abbad0 : #5f708a; font-size: 12px; overflow: elide; }
+            HorizontalLayout { height: 14px; spacing: 8px;
                 Rectangle {
                     Rectangle { x: 0px; y: 4px; height: 3px; width: parent.width; border-radius: 2px; background: root.dark ? #2b374c : #edf1f8;
                         Rectangle { x: 0px; y: 0px; width: parent.width * root.item.share; height: parent.height; border-radius: 2px; background: #7098e8; }
                     }
                 }
-                Text { width: 42px; text: root.item.share-text; color: root.dark ? #9aadc9 : #74849d; font-size: 9px; horizontal-alignment: right; vertical-alignment: center; }
+                Text { width: 48px; text: root.item.share-text; color: root.dark ? #b4c3d9 : #5f708a; font-size: 12px; horizontal-alignment: right; vertical-alignment: center; }
             }
         }
         Text { width: root.compact ? 62px : 72px; text: root.item.keyboard; color: root.sort-mode == 1 ? (root.dark ? #a9c9ff : #3466b7) : (root.dark ? #c8d5e9 : #445570); font-weight: root.sort-mode == 1 ? 600 : 400; horizontal-alignment: right; vertical-alignment: center; font-size: 13px; }
@@ -140,16 +151,16 @@ export component InputList inherits Rectangle {
     VerticalLayout {
         padding: 18px; spacing: 12px;
         Text { height: 22px; text: root.title; font-size: 15px; font-weight: 600; color: root.dark ? #e2eaf6 : #2e3d55; }
-        Text { height: 16px; text: root.subtitle; font-size: 11px; color: root.dark ? #a1afc4 : #74849b; }
-        if root.rows.length == 0: Text { text: root.empty-text; color: root.dark ? #8999b3 : #98a4b6; horizontal-alignment: center; vertical-alignment: center; wrap: word-wrap; }
+        Text { height: 16px; text: root.subtitle; font-size: 12px; color: root.dark ? #aab9d0 : #5f708a; }
+        if root.rows.length == 0: Text { text: root.empty-text; color: root.dark ? #aab9d0 : #5f708a; horizontal-alignment: center; vertical-alignment: center; wrap: word-wrap; }
         if root.rows.length > 0: ListView {
             for row in root.rows: Rectangle {
-                height: 39px;
+                height: 42px;
                 VerticalLayout {
                     spacing: 6px; padding-top: 3px; padding-bottom: 6px;
                     HorizontalLayout {
-                        Text { text: row.label; color: root.dark ? #c6d2e5 : #56657c; font-size: 12px; overflow: elide; }
-                        Text { text: row.count; color: root.dark ? #dce7f9 : #344963; horizontal-alignment: right; font-size: 12px; }
+                        Text { text: row.label; color: root.dark ? #c6d2e5 : #56657c; font-size: 13px; overflow: elide; }
+                        Text { text: row.count; color: root.dark ? #dce7f9 : #344963; horizontal-alignment: right; font-size: 13px; }
                     }
                     Rectangle { height: 3px; background: root.dark ? #29364a : #eff3f9; border-radius: 2px; Rectangle { x: 0px; y: 0px; width: parent.width * row.share; height: 3px; background: #8ba9e9; border-radius: 2px; } }
                 }
@@ -171,14 +182,14 @@ export component HeatKey inherits Rectangle {
     accessible-label: root.label + ": " + count;
     VerticalLayout {
         padding: 5px; spacing: 4px;
-        Text { text: root.label; color: root.count > 0 && root.level >= 0.4 ? white : root.count > 0 && root.level >= 0.15 ? #203f6c : (root.dark ? #c7d7ef : #4c6488); font-size: 10px; horizontal-alignment: center; }
-        Text { text: root.count > 0 ? root.count : "·"; color: root.count > 0 && root.level >= 0.4 ? #eaf2ff : root.count > 0 && root.level >= 0.15 ? #31517e : (root.dark ? #93abc9 : #8ba0bf); font-size: 9px; horizontal-alignment: center; }
+        Text { text: root.label; color: root.count > 0 && root.level >= 0.7 ? white : root.count > 0 && root.level >= 0.15 ? #102742 : (root.dark ? #c7d7ef : #4c6488); font-size: 11px; horizontal-alignment: center; }
+        Text { text: root.count > 0 ? root.count : "·"; color: root.count > 0 && root.level >= 0.7 ? #eaf2ff : root.count > 0 && root.level >= 0.15 ? #102742 : (root.dark ? #c7d7ef : #4c6488); font-size: 10px; horizontal-alignment: center; }
     }
     Rectangle {
         visible: hover.has-hover;
         y: -28px; height: 24px; width: max(parent.width, tooltip-text.preferred-width + 16px);
         border-radius: 4px; background: #24344d;
-        tooltip-text := Text { text: root.label + " · " + root.count; color: white; horizontal-alignment: center; vertical-alignment: center; font-size: 11px; }
+        tooltip-text := Text { text: root.label + " · " + root.count; color: white; horizontal-alignment: center; vertical-alignment: center; font-size: 12px; }
     }
     hover := TouchArea {}
 }
