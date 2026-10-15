@@ -66,6 +66,13 @@ mod raw_input {
     const RI_MOUSE_HWHEEL: u16 = 0x0800;
     const RI_MOUSE_BUTTON_4_DOWN: u16 = 0x0040;
     const RI_MOUSE_BUTTON_5_DOWN: u16 = 0x0100;
+    const MOUSE_COUNTED_FLAGS: u16 = 0x0001
+        | 0x0004
+        | 0x0010
+        | RI_MOUSE_BUTTON_4_DOWN
+        | RI_MOUSE_BUTTON_5_DOWN
+        | RI_MOUSE_WHEEL
+        | RI_MOUSE_HWHEEL;
     const RI_KEY_BREAK: u16 = 0x01;
     const RI_KEY_E0: u16 = 0x02;
     const RI_KEY_E1: u16 = 0x04;
@@ -498,13 +505,12 @@ mod raw_input {
         if read_size == u32::MAX
             || read_size == 0
             || read_size > capacity
-            || size < std::mem::size_of::<RAWINPUTHEADER>() as u32
-            || size != read_size
+            || read_size < std::mem::size_of::<RAWINPUTHEADER>() as u32
+            || raw.header.dwSize != read_size
         {
             RAW_INPUT_DATA_ERRORS.fetch_add(1, Ordering::Relaxed);
             return;
         }
-        let date = Local::now().format("%Y-%m-%d").to_string();
         if raw.header.dwType == RIM_TYPEKEYBOARD.0 {
             if !raw_payload_has_minimum(read_size, std::mem::size_of::<RAWKEYBOARD>()) {
                 RAW_INPUT_DATA_ERRORS.fetch_add(1, Ordering::Relaxed);
@@ -513,6 +519,7 @@ mod raw_input {
             if !USE_RAW_KEYBOARD.load(Ordering::Acquire) {
                 return;
             }
+            let date = Local::now().format("%Y-%m-%d").to_string();
             let k = raw.data.keyboard;
             let key_id =
                 (u32::from(k.MakeCode) << 1) | u32::from(k.Flags & (RI_KEY_E0 | RI_KEY_E1) != 0);
@@ -560,11 +567,15 @@ mod raw_input {
             reset_wheel_state();
             return;
         }
+        let flags = raw.data.mouse.Anonymous.Anonymous.usButtonFlags;
+        if flags & MOUSE_COUNTED_FLAGS == 0 {
+            return;
+        }
+        let date = Local::now().format("%Y-%m-%d").to_string();
         let (app_name, app_path) = point_process();
         if app_path == "Unknown" {
             MOUSE_UNKNOWN_ATTRIBUTION.fetch_add(1, Ordering::Relaxed);
         }
-        let flags = raw.data.mouse.Anonymous.Anonymous.usButtonFlags;
         if mouse_button_codes(flags).next().is_some() {
             RAW_MOUSE_BUTTON_PACKETS.fetch_add(1, Ordering::Relaxed);
         }
@@ -616,7 +627,8 @@ mod raw_input {
         use super::should_count_keydown;
         use super::signed_wheel_delta;
         use super::{
-            RI_MOUSE_BUTTON_4_DOWN, RI_MOUSE_BUTTON_5_DOWN, RI_MOUSE_HWHEEL, RI_MOUSE_WHEEL,
+            MOUSE_COUNTED_FLAGS, RI_MOUSE_BUTTON_4_DOWN, RI_MOUSE_BUTTON_5_DOWN, RI_MOUSE_HWHEEL,
+            RI_MOUSE_WHEEL,
         };
         use std::collections::HashSet;
 
@@ -632,6 +644,16 @@ mod raw_input {
                 header + mouse_payload as u32,
                 mouse_payload
             ));
+        }
+
+        #[test]
+        fn mouse_movement_and_button_release_skip_attribution() {
+            for ignored in [0, 0x0002, 0x0008, 0x0020, 0x0080, 0x0200] {
+                assert_eq!(ignored & MOUSE_COUNTED_FLAGS, 0);
+            }
+            for counted in [0x0001, 0x0004, 0x0010, 0x0040, 0x0100, 0x0400, 0x0800] {
+                assert_ne!(counted & MOUSE_COUNTED_FLAGS, 0);
+            }
         }
 
         #[test]
