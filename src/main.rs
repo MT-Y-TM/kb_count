@@ -492,6 +492,11 @@ fn run() -> anyhow::Result<()> {
             )
         })?,
     ));
+    // Slint's Windows backend may register the mouse Raw Input device while
+    // constructing its window. The collector must register its own HWND last.
+    let ui = MainWindow::new()?;
+    ui.window()
+        .on_close_requested(|| CloseRequestResponse::HideWindow);
     let enabled = Arc::new(AtomicBool::new(cfg.capture_enabled));
     tray::start(Arc::clone(&enabled));
     let events = collector::start(Arc::clone(&enabled));
@@ -570,9 +575,6 @@ fn run() -> anyhow::Result<()> {
                 }
             }
         })?;
-    let ui = MainWindow::new()?;
-    ui.window()
-        .on_close_requested(|| CloseRequestResponse::HideWindow);
     let date = Local::now().format("%Y-%m-%d").to_string();
     let sort_state = Arc::new(Mutex::new(RankingSort::Total));
     ui.set_date_text(date.clone().into());

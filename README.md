@@ -13,6 +13,7 @@ Windows 便携式键盘鼠标输入统计工具，Rust 2024 + Slint + windows-rs
 - 有界输入队列、内存聚合、5 秒批量写入、暂停/恢复。
 - Detailed / Totals Only / Excluded 隐私策略；浏览器默认 Totals Only，密码管理器默认 Excluded。
 - Windows 单实例互斥。
+- Slint 窗口先初始化，随后由采集线程注册鼠标 Raw Input；诊断会核对最终注册目标是否仍为采集窗口。
 - 鼠标点击按光标所在顶层窗口归属应用，滚轮 Delta 支持高精度累积归一化。
 - 启动默认隐藏统计窗口，托盘菜单支持打开、暂停/恢复、设置和退出。
 - Slint 总览卡片、今日/昨日及指定日期查询、应用排行排序、应用详情、策略设置、清空数据二次确认和 CSV 导出。
@@ -67,6 +68,7 @@ INFO kb_count::collector::raw_input: mouse input diagnostic summary raw_input_me
 
 键盘和鼠标分别只记录一次首事件诊断日志；日志不包含按键代码、输入内容、坐标或窗口标题。
 鼠标诊断汇总每 10 秒输出一次，仅包含阶段计数；`raw_mouse_packets=0` 表示尚未收到鼠标 Raw Input，`mouse_events_enqueued` 则表示已进入统计队列。
+`mouse_registration_target_matches=Some(true)` 表示当前进程的鼠标 Raw Input 仍注册到采集窗口。旧版在 Slint 初始化后可能显示 `Some(false)`，使鼠标输入转入别的窗口而无法进入统计链路。
 
 实体鼠标验收可在普通桌面应用中依次执行左键、右键、中键、XButton1、XButton2、垂直滚轮和水平滚轮（设备支持时）。等待一次 10 秒诊断输出并再等待默认 5 秒批量写入：按钮动作应使 `mouse_button_packets` 和 `mouse_events_enqueued` 增加，垂直/水平滚轮应使 `mouse_wheel_packets` 增加并在明细中出现 `wheel_up/down` 或 `hwheel_up/down`。鼠标移动只会增加 `raw_mouse_packets`，不会产生数据库统计行。
 

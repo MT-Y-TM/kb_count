@@ -31,9 +31,9 @@ mod raw_input {
     };
     use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
     use windows::Win32::UI::Input::{
-        GetRawInputData, RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER, RAWKEYBOARD, RAWMOUSE,
-        RID_INPUT, RIDEV_DEVNOTIFY, RIDEV_INPUTSINK, RIM_TYPEKEYBOARD, RIM_TYPEMOUSE,
-        RegisterRawInputDevices,
+        GetRawInputData, GetRegisteredRawInputDevices, RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER,
+        RAWKEYBOARD, RAWMOUSE, RID_INPUT, RIDEV_DEVNOTIFY, RIDEV_INPUTSINK, RIM_TYPEKEYBOARD,
+        RIM_TYPEMOUSE, RegisterRawInputDevices,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         CS_HREDRAW, CS_VREDRAW, CallNextHookEx, CreateWindowExW, DefWindowProcW, DispatchMessageW,
@@ -183,7 +183,7 @@ mod raw_input {
             if let Some(keyboard_hook) = keyboard_hook {
                 let _ = UnhookWindowsHookEx(keyboard_hook);
             }
-            log_diagnostics();
+            log_diagnostics(hwnd);
         }
     }
 
@@ -264,7 +264,7 @@ mod raw_input {
                 handle_input(hwnd, lparam);
             }
         } else if msg == WM_TIMER {
-            log_diagnostics();
+            log_diagnostics(hwnd);
         } else if msg == WM_POWERBROADCAST {
             reset_input_state();
         }
@@ -354,8 +354,27 @@ mod raw_input {
             .unwrap_or(true)
     }
 
-    fn log_diagnostics() {
+    fn mouse_registration_target_matches(hwnd: HWND) -> Option<bool> {
+        let mut devices: [RAWINPUTDEVICE; 16] = std::array::from_fn(|_| RAWINPUTDEVICE::default());
+        let mut capacity = devices.len() as u32;
+        let count = unsafe {
+            GetRegisteredRawInputDevices(
+                Some(devices.as_mut_ptr()),
+                &mut capacity,
+                std::mem::size_of::<RAWINPUTDEVICE>() as u32,
+            )
+        };
+        if count == u32::MAX {
+            return None;
+        }
+        Some(devices[..count as usize].iter().any(|device| {
+            device.usUsagePage == 0x01 && device.usUsage == 0x02 && device.hwndTarget == hwnd
+        }))
+    }
+
+    fn log_diagnostics(hwnd: HWND) {
         tracing::info!(
+            mouse_registration_target_matches = ?mouse_registration_target_matches(hwnd),
             raw_input_messages = RAW_INPUT_MESSAGES.load(Ordering::Relaxed),
             raw_input_data_errors = RAW_INPUT_DATA_ERRORS.load(Ordering::Relaxed),
             raw_mouse_packets = RAW_MOUSE_PACKETS.load(Ordering::Relaxed),
