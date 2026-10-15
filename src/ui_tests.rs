@@ -246,6 +246,71 @@ fn verify_ui_state() {
     window.set_size(slint::PhysicalSize::new(960, 680));
     ui.set_selected_page(0);
     save_preview(&window, "dark-minimum");
+    let pauses = Rc::new(std::cell::Cell::new(0));
+    ui.on_pause_clicked({
+        let pauses = pauses.clone();
+        move || pauses.set(pauses.get() + 1)
+    });
+    let queries = Rc::new(std::cell::Cell::new(0));
+    ui.on_query_clicked({
+        let queries = queries.clone();
+        move || queries.set(queries.get() + 1)
+    });
+    // Exercise logical sizing at the same physical client size: increased DPI
+    // must switch to the compact layout rather than enlarge the window minimum.
+    for (label, scale, width, height) in [
+        ("100", 1.0, 1280, 720),
+        ("125", 1.25, 1280, 720),
+        ("150", 1.5, 1280, 720),
+        ("minimum", 1.0, 820, 440),
+    ] {
+        window
+            .window()
+            .dispatch_event(slint::platform::WindowEvent::ScaleFactorChanged {
+                scale_factor: scale,
+            });
+        window.set_size(slint::PhysicalSize::new(width, height));
+        slint::platform::update_timers_and_animations();
+        assert_eq!(window.size(), slint::PhysicalSize::new(width, height));
+        assert_eq!(ui.get_compact_layout(), label != "100");
+        let compact = ui.get_compact_layout();
+        let logical_width = width as f32 / scale;
+        let narrow = logical_width < 960.0;
+        ui.set_selected_page(3);
+        slint::platform::update_timers_and_animations();
+        click(65.0, if narrow { 132.0 } else { 159.0 });
+        assert_eq!(ui.get_selected_page(), 0, "navigation at {label}%");
+        let before = pauses.get();
+        click(logical_width - 52.0, if compact { 31.0 } else { 51.0 });
+        assert_eq!(pauses.get(), before + 1, "pause remains usable at {label}%");
+        let content_x = if narrow { 129.0 } else { 169.0 } + if compact { 12.0 } else { 26.0 };
+        let before = queries.get();
+        click(content_x + 288.0, if compact { 82.0 } else { 116.0 });
+        assert_eq!(queries.get(), before + 1, "date query at {label}%");
+        click(content_x + 150.0, if compact { 347.0 } else { 431.0 });
+        assert_eq!(
+            ui.get_selected_page(),
+            2,
+            "complete application row at {label}%"
+        );
+        for page in 0..4 {
+            ui.set_selected_page(page);
+            save_preview(&window, &format!("scale-{label}-{page}"));
+        }
+        if label == "minimum" {
+            ui.set_selected_page(0);
+            ui.set_app_search("no-match".into());
+            slint::platform::update_timers_and_animations();
+            save_preview(&window, "scale-minimum-no-match");
+            assert_eq!(window.size(), slint::PhysicalSize::new(width, height));
+            ui.set_app_search("".into());
+            slint::platform::update_timers_and_animations();
+        }
+    }
+    window
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::ScaleFactorChanged { scale_factor: 1.0 });
+    window.set_size(slint::PhysicalSize::new(960, 680));
     db.set_policy("C:/Preview/Editor.exe", "totals_only")
         .unwrap();
     refresh_overview(&ui, &db, date, RankingSort::Total).unwrap();

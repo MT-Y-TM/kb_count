@@ -127,6 +127,14 @@ export component MainWindow inherits Window {
     callback heatmap_all_clicked();
     callback heatmap_app_clicked();
     callback clear_cancel_clicked();
+    in-out property <bool> compact_layout;
+    property <bool> narrow;
+    function adapt-layout() {
+        root.compact_layout = root.width < 1000px || root.height < 650px;
+        root.narrow = root.width < 960px;
+    }
+    changed width => { root.adapt-layout(); }
+    changed height => { root.adapt-layout(); }
     property <color> surface: dark_mode ? #1c2636 : white;
     property <color> line: dark_mode ? #303c50 : #e5eaf2;
     property <color> ink: dark_mode ? #e8effb : #27364f;
@@ -138,29 +146,29 @@ export component MainWindow inherits Window {
 
     title: "kb_count";
     preferred-width: 1060px; preferred-height: 780px;
-    min-width: 960px; min-height: 680px;
+    min-width: 820px; min-height: 440px;
     default-font-family: "Microsoft YaHei UI";
     default-font-size: 13px;
     background: dark_mode ? #131c2b : #f5f7fb;
     HorizontalLayout {
         spacing: 0px;
         Rectangle {
-            width: 168px; background: root.dark_mode ? #182233 : #ffffff;
+            width: root.narrow ? 128px : 168px; background: root.dark_mode ? #182233 : #ffffff;
             VerticalLayout {
-                padding: 16px; spacing: 9px;
+                padding: root.narrow ? 10px : 16px; spacing: 9px;
                 Rectangle {
                     height: 62px;
                     Rectangle { x: 0px; y: 16px; width: 30px; height: 30px; border-radius: 8px; background: #477ce0;
                         Text { text: "k"; color: white; font-size: 22px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
                     }
-                    Text { x: 40px; width: parent.width - 40px; height: parent.height; text: "kb_count"; font-size: 17px; font-weight: 600; color: root.ink; vertical-alignment: center; }
+                    Text { x: root.narrow ? 35px : 40px; width: parent.width - (root.narrow ? 35px : 40px); height: parent.height; text: "kb_count"; font-size: root.narrow ? 14px : 17px; font-weight: 600; color: root.ink; vertical-alignment: center; }
                 }
-                Text { text: "你的输入，清晰可见"; font-size: 10px; color: root.muted; }
+                if !root.narrow: Text { text: "你的输入，清晰可见"; font-size: 10px; color: root.muted; }
                 Rectangle { height: 19px; }
-                NavItem { index: "01"; label: "输入总览"; dark: root.dark_mode; selected: root.selected_page == 0; activated => { root.selected_page = 0; } }
-                NavItem { index: "02"; label: "键位分布"; dark: root.dark_mode; selected: root.selected_page == 1; activated => { root.selected_page = 1; } }
-                NavItem { index: "03"; label: "应用详情"; dark: root.dark_mode; selected: root.selected_page == 2; activated => { root.selected_page = 2; } }
-                NavItem { index: "04"; label: "设置与数据"; dark: root.dark_mode; selected: root.selected_page == 3; activated => { root.selected_page = 3; } }
+                NavItem { compact: root.narrow; index: "01"; label: "输入总览"; dark: root.dark_mode; selected: root.selected_page == 0; activated => { root.selected_page = 0; } }
+                NavItem { compact: root.narrow; index: "02"; label: "键位分布"; dark: root.dark_mode; selected: root.selected_page == 1; activated => { root.selected_page = 1; } }
+                NavItem { compact: root.narrow; index: "03"; label: "应用详情"; dark: root.dark_mode; selected: root.selected_page == 2; activated => { root.selected_page = 2; } }
+                NavItem { compact: root.narrow; index: "04"; label: "设置与数据"; dark: root.dark_mode; selected: root.selected_page == 3; activated => { root.selected_page = 3; } }
                 Rectangle { vertical-stretch: 1; }
                 Rectangle { height: 1px; background: root.line; }
                 Text { text: "仅在本地保存"; color: root.muted; font-size: 11px; }
@@ -169,25 +177,25 @@ export component MainWindow inherits Window {
         }
         Rectangle { width: 1px; background: root.line; }
         VerticalLayout {
-            padding: 26px; spacing: 18px;
+            padding: root.compact_layout ? 12px : 26px; spacing: root.compact_layout ? 10px : 18px;
             HorizontalLayout {
-                height: 50px; spacing: 12px;
+                height: root.compact_layout ? 38px : 50px; spacing: 12px;
                 VerticalLayout {
                     spacing: 5px;
-                    Text { text: root.selected_page == 0 ? "输入总览" : root.selected_page == 1 ? "键位分布" : root.selected_page == 2 ? "应用详情" : "设置与数据"; font-size: 25px; font-weight: 600; color: root.ink; }
-                    Text { text: root.selected_page == 0 ? "查看每天的输入量与应用使用分布" : root.selected_page == 1 ? "按物理键位查看使用频率" : root.selected_page == 2 ? "深入了解单个应用的输入统计" : "管理采集方式、外观与本地数据"; font-size: 11px; color: root.muted; }
+                    Text { text: root.selected_page == 0 ? "输入总览" : root.selected_page == 1 ? "键位分布" : root.selected_page == 2 ? "应用详情" : "设置与数据"; font-size: root.compact_layout ? 22px : 25px; font-weight: 600; color: root.ink; }
+                    if !root.compact_layout: Text { text: root.selected_page == 0 ? "查看每天的输入量与应用使用分布" : root.selected_page == 1 ? "按物理键位查看使用频率" : root.selected_page == 2 ? "深入了解单个应用的输入统计" : "管理采集方式、外观与本地数据"; font-size: 11px; color: root.muted; }
                 }
                 Rectangle { horizontal-stretch: 1; }
                 Rectangle {
-                    width: 88px; height: 50px;
+                    width: 88px; height: root.compact_layout ? 38px : 50px;
                     Rectangle {
-                        y: 11px; width: 88px; height: 28px; border-radius: 14px;
+                        y: root.compact_layout ? 5px : 11px; width: 88px; height: 28px; border-radius: 14px;
                         background: root.capture_active ? (root.dark_mode ? #1c3c36 : #eaf6f0) : (root.dark_mode ? #443b26 : #fff4df);
                         Rectangle { x: 11px; y: 12px; width: 5px; height: 5px; border-radius: 3px; background: root.capture_active ? #46a785 : #cf9a3e; }
                         Text { x: 22px; width: 60px; height: 28px; text: root.capture_active ? "正在统计" : "已暂停"; color: root.capture_active ? (root.dark_mode ? #9ad8c0 : #40866b) : #bb8e41; font-size: 11px; vertical-alignment: center; }
                     }
                 }
-                VerticalLayout { horizontal-stretch: 0; padding-top: 9px; padding-bottom: 9px; ActionButton { text: root.capture_active ? "暂停统计" : "恢复统计"; clicked => { root.pause_clicked(); } } }
+                VerticalLayout { horizontal-stretch: 0; padding-top: root.compact_layout ? 3px : 9px; padding-bottom: root.compact_layout ? 3px : 9px; ActionButton { text: root.capture_active ? "暂停统计" : "恢复统计"; clicked => { root.pause_clicked(); } } }
             }
             if root.selected_page != 3: Rectangle {
                 height: 44px; border-radius: 8px; background: root.surface; border-width: 1px; border-color: root.line;
@@ -204,17 +212,17 @@ export component MainWindow inherits Window {
             Rectangle {
                 vertical-stretch: 1;
                 if root.selected_page == 0: VerticalLayout {
-                    spacing: 18px;
+                    spacing: root.compact_layout ? 10px : 18px;
                     HorizontalLayout { spacing: 12px;
-                        MetricCard { label: "键盘敲击"; value: root.keyboard_text; caption: "KEYSTROKES"; dark: root.dark_mode; accent: #5d87e5; }
-                        MetricCard { label: "鼠标点击"; value: root.mouse_text; caption: "MOUSE CLICKS"; dark: root.dark_mode; accent: #4eaa99; }
-                        MetricCard { label: "滚轮单位"; value: root.wheel_text; caption: "SCROLL UNITS"; dark: root.dark_mode; accent: #9a82cf; }
-                        MetricCard { label: "活跃应用"; value: root.app_text; caption: "APPLICATIONS"; dark: root.dark_mode; accent: #d8a667; }
+                        MetricCard { compact: root.compact_layout; label: "键盘敲击"; value: root.keyboard_text; caption: "KEYSTROKES"; dark: root.dark_mode; accent: #5d87e5; }
+                        MetricCard { compact: root.compact_layout; label: "鼠标点击"; value: root.mouse_text; caption: "MOUSE CLICKS"; dark: root.dark_mode; accent: #4eaa99; }
+                        MetricCard { compact: root.compact_layout; label: "滚轮单位"; value: root.wheel_text; caption: "SCROLL UNITS"; dark: root.dark_mode; accent: #9a82cf; }
+                        MetricCard { compact: root.compact_layout; label: "活跃应用"; value: root.app_text; caption: "APPLICATIONS"; dark: root.dark_mode; accent: #d8a667; }
                     }
                     Rectangle {
                         vertical-stretch: 1; border-radius: 10px; border-width: 1px; border-color: root.line; background: root.surface;
                         VerticalLayout { spacing: 0px;
-                            HorizontalLayout { height: 50px; padding-top: 9px; padding-bottom: 9px; padding-left: 18px; padding-right: 18px; spacing: 6px;
+                            HorizontalLayout { height: root.compact_layout ? 42px : 50px; padding-top: root.compact_layout ? 5px : 9px; padding-bottom: root.compact_layout ? 5px : 9px; padding-left: 18px; padding-right: 18px; spacing: 6px;
                                 Text { text: "应用输入排行"; color: root.ink; font-size: 16px; font-weight: 600; vertical-alignment: center; }
                                 Rectangle { horizontal-stretch: 1; }
                                 ActionButton { text: "总量"; primary: root.ranking_sort == 0; clicked => { root.sort_total_clicked(); } }
@@ -227,29 +235,30 @@ export component MainWindow inherits Window {
                                 Text { text: root.ranking_result; color: root.muted; font-size: 11px; vertical-alignment: center; horizontal-alignment: right; horizontal-stretch: 0; }
                             }
                             Rectangle { height: 31px; background: root.dark_mode ? #202c3e : #f8fafd;
-                                HorizontalLayout { padding-left: 16px; padding-right: 16px; spacing: 12px;
+                                HorizontalLayout { padding-left: 16px; padding-right: 16px; spacing: root.narrow ? 8px : 12px;
                                     Text { text: "应用 / " + root.ranking_share_label; color: root.muted; font-size: 10px; vertical-alignment: center; }
-                                    Text { width: 72px; text: "键盘"; horizontal-alignment: right; vertical-alignment: center; font-size: 10px; color: root.muted; }
-                                    Text { width: 64px; text: "鼠标"; horizontal-alignment: right; vertical-alignment: center; font-size: 10px; color: root.muted; }
-                                    Text { width: 64px; text: "滚轮"; horizontal-alignment: right; vertical-alignment: center; font-size: 10px; color: root.muted; }
-                                    Text { width: 82px; text: "总输入"; horizontal-alignment: right; vertical-alignment: center; font-size: 10px; color: root.muted; }
+                                    Text { width: root.narrow ? 62px : 72px; text: "键盘"; horizontal-alignment: right; vertical-alignment: center; font-size: 10px; color: root.muted; }
+                                    Text { width: root.narrow ? 54px : 64px; text: "鼠标"; horizontal-alignment: right; vertical-alignment: center; font-size: 10px; color: root.muted; }
+                                    Text { width: root.narrow ? 54px : 64px; text: "滚轮"; horizontal-alignment: right; vertical-alignment: center; font-size: 10px; color: root.muted; }
+                                    Text { width: root.narrow ? 70px : 82px; text: "总输入"; horizontal-alignment: right; vertical-alignment: center; font-size: 10px; color: root.muted; }
                                 }
                             }
                             if root.app_rows.length > 0: ListView {
-                                for app in root.app_rows: AppListRow { item: app; dark: root.dark_mode; sort-mode: root.ranking_sort; selected(path) => { root.ranking_app_clicked(path); root.selected_page = 2; } }
+                                for app in root.app_rows: AppListRow { compact: root.narrow; item: app; dark: root.dark_mode; sort-mode: root.ranking_sort; selected(path) => { root.ranking_app_clicked(path); root.selected_page = 2; } }
                             }
                             if root.app_rows.length == 0: VerticalLayout {
-                                padding: 40px; spacing: 10px;
+                                padding: root.compact_layout ? 12px : 40px; spacing: 10px;
                                 Rectangle { vertical-stretch: 1; }
-                                Text { text: root.all_app_rows.length > 0 ? "没有匹配的应用" : "这一天还没有输入记录"; color: root.ink; font-size: 17px; horizontal-alignment: center; }
-                                Text { text: root.all_app_rows.length > 0 ? "试试应用名称、部分路径，或清除搜索。" : "统计会自动保存在本地，稍后再来看看。"; color: root.muted; font-size: 12px; horizontal-alignment: center; }
+                                Text { text: root.all_app_rows.length > 0 ? "没有匹配的应用" : "这一天还没有输入记录"; color: root.ink; font-size: root.compact_layout ? 14px : 17px; horizontal-alignment: center; }
+                                if !root.compact_layout: Text { text: root.all_app_rows.length > 0 ? "试试应用名称、部分路径，或清除搜索。" : "统计会自动保存在本地，稍后再来看看。"; color: root.muted; font-size: 12px; horizontal-alignment: center; }
                                 Rectangle { vertical-stretch: 1; }
                             }
-                            Text { height: 24px; text: "总输入 = 键盘敲击 + 鼠标点击 + 滚轮单位；占比按当前排序，基于当天全部应用。"; color: root.muted; font-size: 10px; vertical-alignment: center; horizontal-alignment: center; }
+                            Text { height: 24px; text: root.narrow ? "总量 = 键盘 + 点击 + 滚轮；占比基于当天全部应用" : "总输入 = 键盘敲击 + 鼠标点击 + 滚轮单位；占比按当前排序，基于当天全部应用。"; color: root.muted; font-size: 10px; vertical-alignment: center; horizontal-alignment: center; }
                         }
                     }
                 }
                 if root.selected_page == 1: ScrollView {
+                    viewport-width: max(self.visible-width, 700px);
                     viewport-height: max(self.visible-height, keys-content.preferred-height);
                     keys-content := VerticalLayout { spacing: 16px; padding-right: 6px;
                         Rectangle { border-radius: 10px; border-width: 1px; border-color: root.line; background: root.surface;
@@ -306,9 +315,9 @@ export component MainWindow inherits Window {
                             }
                         }
                         if root.detail_loaded: HorizontalLayout { spacing: 12px;
-                            MetricCard { label: "键盘敲击"; value: root.detail_keyboard; caption: "KEYSTROKES"; dark: root.dark_mode; }
-                            MetricCard { label: "鼠标点击"; value: root.detail_mouse; caption: "MOUSE CLICKS"; dark: root.dark_mode; accent: #4eaa99; }
-                            MetricCard { label: "滚轮单位"; value: root.detail_wheel; caption: "SCROLL UNITS"; dark: root.dark_mode; accent: #9a82cf; }
+                            MetricCard { compact: root.compact_layout; label: "键盘敲击"; value: root.detail_keyboard; caption: "KEYSTROKES"; dark: root.dark_mode; }
+                            MetricCard { compact: root.compact_layout; label: "鼠标点击"; value: root.detail_mouse; caption: "MOUSE CLICKS"; dark: root.dark_mode; accent: #4eaa99; }
+                            MetricCard { compact: root.compact_layout; label: "滚轮单位"; value: root.detail_wheel; caption: "SCROLL UNITS"; dark: root.dark_mode; accent: #9a82cf; }
                         }
                         if root.detail_loaded: Text { text: root.detail_note; color: root.muted; font-size: 12px; wrap: word-wrap; }
                         if root.detail_loaded: HorizontalLayout { height: 280px; spacing: 16px;

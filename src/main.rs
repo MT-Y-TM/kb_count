@@ -6,6 +6,7 @@ mod storage;
 mod tray;
 #[cfg(test)]
 mod ui_tests;
+mod ui_window;
 slint::include_modules!();
 use crate::stats::aggregator::Aggregator;
 use crate::stats::policy::CaptureMode;
@@ -1147,6 +1148,8 @@ fn run() -> anyhow::Result<()> {
                     }
                     let _ = ui.show();
                     ui.window().set_minimized(false);
+                    #[cfg(windows)]
+                    ui_window::fit_to_work_area(ui.window());
                 }
             }
             tray::Command::TogglePause => {

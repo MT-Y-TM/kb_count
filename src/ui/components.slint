@@ -27,6 +27,7 @@ export component NavItem inherits Rectangle {
     in property <string> index;
     in property <bool> selected;
     in property <bool> dark;
+    in property <bool> compact;
     callback activated();
     height: 46px;
     border-radius: 7px;
@@ -38,8 +39,8 @@ export component NavItem inherits Rectangle {
     accessible-action-default => { root.activated(); }
     forward-focus: focus;
     HorizontalLayout {
-        padding-left: 14px; padding-right: 12px; spacing: 12px;
-        Text { text: root.index; width: 20px; color: root.selected ? #5489ee : (root.dark ? #8796af : #929eb0); font-size: 11px; vertical-alignment: center; }
+        padding-left: root.compact ? 10px : 14px; padding-right: 12px; spacing: 12px;
+        if !root.compact: Text { text: root.index; width: 20px; color: root.selected ? #5489ee : (root.dark ? #8796af : #929eb0); font-size: 11px; vertical-alignment: center; }
         Text { text: root.label; color: root.selected ? (root.dark ? #a9c9ff : #2458b8) : (root.dark ? #c4cede : #526075); font-size: 14px; font-weight: root.selected ? 600 : 400; vertical-alignment: center; }
     }
     focus := FocusScope {
@@ -57,20 +58,21 @@ export component MetricCard inherits Rectangle {
     in property <string> caption;
     in property <color> accent: #4c7fe5;
     in property <bool> dark;
-    height: 104px;
+    in property <bool> compact;
+    height: compact ? 78px : 104px;
     border-radius: 10px;
     border-width: 1px;
     border-color: dark ? #303c50 : #e5eaf2;
     background: dark ? #1c2636 : white;
     VerticalLayout {
-        padding: 17px; spacing: 6px;
+        padding: root.compact ? 12px : 17px; spacing: root.compact ? 4px : 6px;
         HorizontalLayout {
             Text { text: root.label; color: root.dark ? #a5b2c6 : #6a778c; font-size: 12px; }
             Rectangle { horizontal-stretch: 1; }
             Rectangle { width: 6px; height: 6px; border-radius: 3px; background: root.accent; }
         }
-        Text { text: root.value; color: root.dark ? #f0f4fb : #1d2b43; font-size: 30px; font-weight: 600; }
-        Text { text: root.caption; color: root.dark ? #8190a8 : #94a0b1; font-size: 10px; }
+        Text { text: root.value; color: root.dark ? #f0f4fb : #1d2b43; font-size: root.compact ? 26px : 30px; font-weight: 600; overflow: elide; }
+        if !root.compact: Text { text: root.caption; color: root.dark ? #8190a8 : #94a0b1; font-size: 10px; }
     }
 }
 
@@ -78,6 +80,7 @@ export component AppListRow inherits Rectangle {
     in property <AppRow> item;
     in property <bool> dark;
     in property <int> sort-mode;
+    in property <bool> compact;
     callback selected(string);
     height: 64px;
     border-width: focus.has-focus ? 1px : 0px;
@@ -88,7 +91,7 @@ export component AppListRow inherits Rectangle {
     accessible-action-default => { root.selected(root.item.path); }
     forward-focus: focus;
     HorizontalLayout {
-        padding-left: 16px; padding-right: 16px; spacing: 12px;
+        padding-left: 16px; padding-right: 16px; spacing: root.compact ? 8px : 12px;
         Text { width: 20px; text: root.item.rank; color: root.dark ? #8494ae : #96a1b2; font-size: 12px; vertical-alignment: center; }
         Rectangle {
             width: 32px; height: 64px;
@@ -110,10 +113,10 @@ export component AppListRow inherits Rectangle {
                 Text { width: 42px; text: root.item.share-text; color: root.dark ? #9aadc9 : #74849d; font-size: 9px; horizontal-alignment: right; vertical-alignment: center; }
             }
         }
-        Text { width: 72px; text: root.item.keyboard; color: root.sort-mode == 1 ? (root.dark ? #a9c9ff : #3466b7) : (root.dark ? #c8d5e9 : #445570); font-weight: root.sort-mode == 1 ? 600 : 400; horizontal-alignment: right; vertical-alignment: center; font-size: 13px; }
-        Text { width: 64px; text: root.item.mouse; color: root.sort-mode == 2 ? (root.dark ? #a9c9ff : #3466b7) : (root.dark ? #c8d5e9 : #445570); font-weight: root.sort-mode == 2 ? 600 : 400; horizontal-alignment: right; vertical-alignment: center; font-size: 13px; }
-        Text { width: 64px; text: root.item.wheel; color: root.dark ? #c8d5e9 : #445570; horizontal-alignment: right; vertical-alignment: center; font-size: 13px; }
-        Text { width: 82px; text: root.item.total; color: root.sort-mode == 0 ? (root.dark ? #a9c9ff : #3466b7) : (root.dark ? #d9e5f6 : #354a68); font-weight: 600; horizontal-alignment: right; vertical-alignment: center; font-size: 13px; }
+        Text { width: root.compact ? 62px : 72px; text: root.item.keyboard; color: root.sort-mode == 1 ? (root.dark ? #a9c9ff : #3466b7) : (root.dark ? #c8d5e9 : #445570); font-weight: root.sort-mode == 1 ? 600 : 400; horizontal-alignment: right; vertical-alignment: center; font-size: 13px; }
+        Text { width: root.compact ? 54px : 64px; text: root.item.mouse; color: root.sort-mode == 2 ? (root.dark ? #a9c9ff : #3466b7) : (root.dark ? #c8d5e9 : #445570); font-weight: root.sort-mode == 2 ? 600 : 400; horizontal-alignment: right; vertical-alignment: center; font-size: 13px; }
+        Text { width: root.compact ? 54px : 64px; text: root.item.wheel; color: root.dark ? #c8d5e9 : #445570; horizontal-alignment: right; vertical-alignment: center; font-size: 13px; }
+        Text { width: root.compact ? 70px : 82px; text: root.item.total; color: root.sort-mode == 0 ? (root.dark ? #a9c9ff : #3466b7) : (root.dark ? #d9e5f6 : #354a68); font-weight: 600; horizontal-alignment: right; vertical-alignment: center; font-size: 13px; }
     }
     Rectangle { y: parent.height - 1px; height: 1px; background: root.dark ? #2c374b : #eff2f7; }
     focus := FocusScope {
