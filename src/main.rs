@@ -1,14 +1,17 @@
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 mod collector;
 mod config;
 mod stats;
 mod storage;
 mod tray;
+#[cfg(test)]
+mod ui_tests;
 slint::include_modules!();
 use crate::stats::aggregator::Aggregator;
 use crate::stats::policy::CaptureMode;
 use anyhow::Context;
 use chrono::Local;
-use slint::{CloseRequestResponse, SharedString, Timer, TimerMode};
+use slint::{CloseRequestResponse, Timer, TimerMode};
 use std::path::PathBuf;
 use std::sync::{
     Arc, Mutex,
@@ -21,10 +24,6 @@ use std::time::Duration;
 use windows::Win32::Foundation::GetLastError;
 #[cfg(windows)]
 use windows::Win32::System::Threading::CreateMutexW;
-#[cfg(windows)]
-use windows::Win32::UI::WindowsAndMessaging::{
-    FindWindowW, SW_RESTORE, SetForegroundWindow, ShowWindow,
-};
 #[cfg(windows)]
 use windows::core::{PCWSTR, w};
 
@@ -51,17 +50,22 @@ fn heat_count_ext(rows: &[storage::database::KeyTotal], scan_code: &str, extende
         .unwrap_or(0)
 }
 
-fn ranking_path(item: &str) -> Option<&str> {
-    let prefix = "\n   路径: ";
-    let start = item.find(prefix)? + prefix.len();
-    let path = &item[start..];
-    Some(path.split('\n').next().unwrap_or(path).trim())
-}
-
 fn display_input_code(code: &str) -> String {
     let mut parts = code.split(':');
     if parts.next() != Some("scan") {
-        return code.to_string();
+        return match code {
+            "left" => "鼠标左键",
+            "right" => "鼠标右键",
+            "middle" => "鼠标中键",
+            "x1" => "侧键 XButton1",
+            "x2" => "侧键 XButton2",
+            "wheel_up" => "滚轮向上",
+            "wheel_down" => "滚轮向下",
+            "hwheel_up" => "水平滚轮向右",
+            "hwheel_down" => "水平滚轮向左",
+            _ => code,
+        }
+        .to_string();
     }
     let Some(scan) = parts
         .next()
@@ -103,12 +107,29 @@ fn display_input_code(code: &str) -> String {
         (0x35, true) => "Numpad /",
         (0x35, false) => "/",
         (0x36, _) => "Right Shift",
-        (0x37, _) => "Numpad *",
+        (0x37, true) => "Print Screen",
+        (0x37, false) => "Numpad *",
         (0x38, true) => "Right Alt",
         (0x38, false) => "Left Alt",
         (0x39, _) => "Space",
         (0x3a, _) => "Caps Lock",
-        (0x3b..=0x46, _) => return format!("F{}", scan - 0x3a),
+        (0x3b..=0x44, _) => return format!("F{}", scan - 0x3a),
+        (0x45, _) => "Num Lock",
+        (0x46, _) => "Scroll Lock",
+        (0x47, true) => "Home",
+        (0x48, true) => "↑",
+        (0x49, true) => "Page Up",
+        (0x4b, true) => "←",
+        (0x4d, true) => "→",
+        (0x4f, true) => "End",
+        (0x50, true) => "↓",
+        (0x51, true) => "Page Down",
+        (0x52, true) => "Insert",
+        (0x53, true) => "Delete",
+        (0x57, _) => "F11",
+        (0x58, _) => "F12",
+        (0x5b, true) => "Left Win",
+        (0x5c, true) => "Right Win",
         _ => return code.to_string(),
     };
     name.to_string()
@@ -158,7 +179,26 @@ fn choose_csv_path(default_name: &str) -> Option<PathBuf> {
 }
 
 fn set_heatmap(ui: &MainWindow, rows: &[storage::database::KeyTotal]) {
-    ui.set_heat_esc(heat_count(rows, "01"));
+    let functions = [
+        ("Esc", "01"),
+        ("F1", "3b"),
+        ("F2", "3c"),
+        ("F3", "3d"),
+        ("F4", "3e"),
+        ("F5", "3f"),
+        ("F6", "40"),
+        ("F7", "41"),
+        ("F8", "42"),
+        ("F9", "43"),
+        ("F10", "44"),
+        ("F11", "57"),
+        ("F12", "58"),
+    ]
+    .map(|(label, scan)| HeatCell {
+        label: label.into(),
+        count: heat_count(rows, scan),
+    });
+    ui.set_heat_function_keys(functions.as_slice().into());
     ui.set_heat_1(heat_count(rows, "02"));
     ui.set_heat_2(heat_count(rows, "03"));
     ui.set_heat_3(heat_count(rows, "04"));
@@ -260,14 +300,76 @@ impl RankingSort {
             Self::Total => "total",
         }
     }
+}
 
-    fn label(self) -> &'static str {
-        match self {
-            Self::Keyboard => "当前按键盘排序",
-            Self::Mouse => "当前按鼠标排序",
-            Self::Total => "当前按总量排序",
+fn format_count(value: i64) -> String {
+    let text = value.max(0).to_string();
+    let mut formatted = String::with_capacity(text.len() + text.len() / 3);
+    for (index, ch) in text.chars().enumerate() {
+        if index > 0 && (text.len() - index).is_multiple_of(3) {
+            formatted.push(',');
         }
+        formatted.push(ch);
     }
+    formatted
+}
+
+fn input_rows(rows: &[storage::database::KeyTotal]) -> Vec<InputRow> {
+    let maximum = rows.iter().map(|row| row.count).max().unwrap_or(1).max(1) as f32;
+    rows.iter()
+        .map(|row| InputRow {
+            label: display_input_code(&row.code).into(),
+            count: format_count(row.count).into(),
+            share: (row.count as f32 / maximum).clamp(0.0, 1.0),
+        })
+        .collect()
+}
+
+fn refresh_heatmap(
+    ui: &MainWindow,
+    database: &storage::database::Database,
+    date: &str,
+) -> anyhow::Result<()> {
+    let path = ui.get_detail_path().to_string();
+    let app = (ui.get_heatmap_scope() == 1 && ui.get_detail_loaded()).then_some(path.as_str());
+    let totals_only = app
+        .map(|path| database.app_detail(date, path))
+        .transpose()?
+        .flatten()
+        .is_some_and(|detail| detail.policy == CaptureMode::TotalsOnly);
+    let keys = if totals_only {
+        Vec::new()
+    } else {
+        database.input_ranking(date, app, "keyboard")?
+    };
+    let mut mouse = if totals_only {
+        Vec::new()
+    } else {
+        database.input_ranking(date, app, "mouse")?
+    };
+    if !totals_only {
+        mouse.extend(database.input_ranking(date, app, "wheel")?);
+        mouse.sort_by(|left, right| right.count.cmp(&left.count));
+    }
+    ui.set_heatmap_max(
+        keys.iter()
+            .map(|row| row.count)
+            .max()
+            .unwrap_or(1)
+            .clamp(1, i64::from(i32::MAX)) as i32,
+    );
+    ui.set_heatmap_note(
+        if totals_only {
+            "未记录详细数据：该应用仅保存输入总量。"
+        } else {
+            "颜色按当前筛选下的最高频次分级；特殊键位可在下方完整列表中查看。"
+        }
+        .into(),
+    );
+    ui.set_key_rows(input_rows(&keys).as_slice().into());
+    ui.set_mouse_rows(input_rows(&mouse).as_slice().into());
+    set_heatmap(ui, &keys);
+    Ok(())
 }
 
 fn refresh_overview(
@@ -277,87 +379,55 @@ fn refresh_overview(
     sort: RankingSort,
 ) -> anyhow::Result<()> {
     let (keyboard, mouse, wheel, apps) = database.totals(date)?;
+    if ui.get_date_text().as_str() != date {
+        ui.set_query_date(date.into());
+    }
     ui.set_date_text(date.into());
-    ui.set_query_date(date.into());
-    ui.set_export_from_date(date.into());
-    ui.set_export_to_date(date.into());
-    ui.set_keyboard_text(keyboard.to_string().into());
-    ui.set_mouse_text(mouse.to_string().into());
-    ui.set_wheel_text(wheel.to_string().into());
-    ui.set_app_text(apps.to_string().into());
-    let ranking_rows = database
-        .app_totals_sorted(date, sort.as_query())?
+    ui.set_keyboard_text(format_count(keyboard).into());
+    ui.set_mouse_text(format_count(mouse).into());
+    ui.set_wheel_text(format_count(wheel).into());
+    ui.set_app_text(format_count(apps).into());
+    let totals = database.app_totals_sorted(date, sort.as_query())?;
+    let metric = |row: &storage::database::AppTotal| match sort {
+        RankingSort::Keyboard => row.keyboard,
+        RankingSort::Mouse => row.mouse,
+        RankingSort::Total => row.keyboard + row.mouse + row.wheel.abs(),
+    };
+    let sum = totals.iter().map(&metric).sum::<i64>().max(1) as f32;
+    let rows = totals
         .into_iter()
-        .take(8)
         .enumerate()
         .map(|(index, row)| {
-            format!(
-                "{}. {}\n   路径: {}\n   键盘:{} 鼠标:{} 滚轮:{}",
-                index + 1,
-                row.app_name,
-                row.app_path,
-                row.keyboard,
-                row.mouse,
-                row.wheel
-            )
+            let share = metric(&row) as f32 / sum;
+            AppRow {
+                rank: (index + 1) as i32,
+                initial: row
+                    .app_name
+                    .chars()
+                    .next()
+                    .unwrap_or('?')
+                    .to_uppercase()
+                    .to_string()
+                    .into(),
+                name: row.app_name.into(),
+                path: row.app_path.into(),
+                keyboard: format_count(row.keyboard).into(),
+                mouse: format_count(row.mouse).into(),
+                wheel: format_count(row.wheel).into(),
+                share: share.clamp(0.0, 1.0),
+            }
         })
         .collect::<Vec<_>>();
-    ui.set_ranking_text(
-        if ranking_rows.is_empty() {
-            "暂无应用输入记录".to_string()
-        } else {
-            "点击下方应用可查看详情".to_string()
-        }
-        .into(),
-    );
-    let ranking_items = ranking_rows
-        .iter()
-        .map(|row| SharedString::from(row.as_str()))
-        .collect::<Vec<_>>();
-    ui.set_ranking_items(ranking_items.as_slice().into());
-    ui.set_ranking_sort_text(sort.label().into());
-    ui.set_heatmap_title("键盘热力图（当前日期，全局）".into());
-    let all_keys = database.input_ranking(date, None, "keyboard")?;
-    let keys = all_keys
-        .iter()
-        .take(10)
-        .map(|row| format!("{}:{}", display_input_code(&row.code), row.count))
-        .collect::<Vec<_>>()
-        .join("  ");
-    let mouse = database
-        .input_ranking(date, None, "mouse")?
-        .into_iter()
-        .map(|row| format!("{}:{}", row.code, row.count))
-        .collect::<Vec<_>>()
-        .join("  ");
-    let wheel = database
-        .input_ranking(date, None, "wheel")?
-        .into_iter()
-        .map(|row| format!("{}:{}", row.code, row.count))
-        .collect::<Vec<_>>()
-        .join("  ");
-    ui.set_frequency_text(
-        format!(
-            "全局按键排行: {}\n鼠标分类统计: {}\n滚轮分类统计: {}",
-            if keys.is_empty() {
-                "无详细数据"
-            } else {
-                &keys
-            },
-            if mouse.is_empty() {
-                "无详细数据"
-            } else {
-                &mouse
-            },
-            if wheel.is_empty() {
-                "无详细数据"
-            } else {
-                &wheel
-            }
-        )
-        .into(),
-    );
-    set_heatmap(ui, &all_keys);
+    ui.set_app_rows(rows.as_slice().into());
+    ui.set_ranking_sort(match sort {
+        RankingSort::Total => 0,
+        RankingSort::Keyboard => 1,
+        RankingSort::Mouse => 2,
+    });
+    if ui.get_detail_loaded() {
+        refresh_detail(ui, database, date, ui.get_detail_path().as_str())?;
+    }
+    refresh_heatmap(ui, database, date)?;
     Ok(())
 }
 
@@ -368,63 +438,57 @@ fn refresh_detail(
     path: &str,
 ) -> anyhow::Result<()> {
     let Some(detail) = database.app_detail(date, path)? else {
-        ui.set_detail_text("未找到该应用。请先在该应用中产生输入，或检查完整路径。".into());
+        ui.set_detail_loaded(false);
+        ui.set_heatmap_scope(0);
+        ui.set_detail_text("未找到该应用，请从应用排行选择，或检查完整路径。".into());
         return Ok(());
     };
-    let keys = database.input_ranking(date, Some(path), "keyboard")?;
-    let mouse = database.input_ranking(date, Some(path), "mouse")?;
-    let wheel = database.input_ranking(date, Some(path), "wheel")?;
-    let key_text = if detail.policy == CaptureMode::TotalsOnly {
-        "未记录详细数据".to_string()
+    let totals_only = detail.policy == CaptureMode::TotalsOnly;
+    let keys = if totals_only {
+        Vec::new()
     } else {
-        keys.iter()
-            .map(|row| format!("{}:{}", display_input_code(&row.code), row.count))
-            .collect::<Vec<_>>()
-            .join("  ")
+        database.input_ranking(date, Some(path), "keyboard")?
     };
-    if detail.policy == CaptureMode::TotalsOnly {
-        ui.set_heatmap_title("键盘热力图：未记录详细数据".into());
-        set_heatmap(ui, &[]);
+    let mut mouse = if totals_only {
+        Vec::new()
     } else {
-        ui.set_heatmap_title("键盘热力图（当前日期，当前应用）".into());
-        set_heatmap(ui, &keys);
+        database.input_ranking(date, Some(path), "mouse")?
+    };
+    if !totals_only {
+        mouse.extend(database.input_ranking(date, Some(path), "wheel")?);
+        mouse.sort_by(|left, right| right.count.cmp(&left.count));
     }
-    let mouse_text = mouse
-        .into_iter()
-        .map(|row| format!("{}:{}", row.code, row.count))
-        .collect::<Vec<_>>()
-        .join("  ");
-    let wheel_text = wheel
-        .into_iter()
-        .map(|row| format!("{}:{}", row.code, row.count))
-        .collect::<Vec<_>>()
-        .join("  ");
-    ui.set_detail_text(
-        format!(
-            "{}\n路径: {}\n策略: {}\n键盘: {}  鼠标: {}  滚轮: {}\n按键: {}\n鼠标分类: {}\n滚轮分类: {}",
-            detail.app_name,
-            detail.app_path,
-            detail.policy.as_str(),
-            detail.keyboard,
-            detail.mouse,
-            detail.wheel,
-            key_text,
-            if mouse_text.is_empty() {
-                "无详细数据"
-            } else {
-                &mouse_text
-            },
-            if wheel_text.is_empty() {
-                "无详细数据"
-            } else {
-                &wheel_text
-            }
-        )
+    ui.set_detail_loaded(true);
+    ui.set_detail_name(detail.app_name.into());
+    ui.set_detail_path(detail.app_path.into());
+    ui.set_detail_keyboard(format_count(detail.keyboard).into());
+    ui.set_detail_mouse(format_count(detail.mouse).into());
+    ui.set_detail_wheel(format_count(detail.wheel).into());
+    ui.set_detail_mode_label(
+        match detail.policy {
+            CaptureMode::Detailed => "详细统计",
+            CaptureMode::TotalsOnly => "仅统计总量",
+            CaptureMode::Excluded => "已排除",
+        }
         .into(),
     );
+    ui.set_detail_note(
+        if totals_only {
+            "未记录详细数据：该应用仅保存输入总量。"
+        } else if detail.policy == CaptureMode::Excluded {
+            "此应用当前已排除；下方仅展示此前保留的历史记录。"
+        } else if keys.is_empty() && mouse.is_empty() {
+            "所选日期暂无详细输入记录。"
+        } else {
+            "仅保存分类计数，不记录输入文字、按键顺序或鼠标轨迹。"
+        }
+        .into(),
+    );
+    ui.set_detail_key_rows(input_rows(&keys).as_slice().into());
+    ui.set_detail_mouse_rows(input_rows(&mouse).as_slice().into());
+    ui.set_detail_text("".into());
     Ok(())
 }
-
 fn main() {
     if let Err(error) = run() {
         #[cfg(windows)]
@@ -455,15 +519,10 @@ fn run() -> anyhow::Result<()> {
     let _instance_mutex = unsafe {
         let mutex = CreateMutexW(None, false, w!("Global\\kb_count_single_instance"))?;
         if GetLastError().0 == 183 {
-            // The first process creates the mutex before Slint creates its
-            // window. Wait briefly so an immediate second click can still
-            // activate the existing panel instead of silently returning.
+            // Ask the UI event loop to show its window. Showing the native
+            // HWND directly leaves Slint unaware of the visibility change.
             for _ in 0..20 {
-                if let Ok(window) = FindWindowW(None, w!("kb_count"))
-                    && !window.0.is_null()
-                {
-                    let _ = ShowWindow(window, SW_RESTORE);
-                    let _ = SetForegroundWindow(window);
+                if tray::activate_existing() {
                     break;
                 }
                 thread::sleep(Duration::from_millis(50));
@@ -577,13 +636,15 @@ fn run() -> anyhow::Result<()> {
         })?;
     let date = Local::now().format("%Y-%m-%d").to_string();
     let sort_state = Arc::new(Mutex::new(RankingSort::Total));
+    ui.set_capture_active(cfg.capture_enabled);
+    ui.set_data_directory(dir.display().to_string().into());
+    ui.set_version_text(env!("CARGO_PKG_VERSION").into());
     ui.set_date_text(date.clone().into());
     ui.set_query_date(date.clone().into());
     ui.set_keyboard_text("0".into());
     ui.set_mouse_text("0".into());
     ui.set_wheel_text("0".into());
     ui.set_app_text("0".into());
-    ui.set_ranking_text("打开统计面板后加载数据".into());
     ui.set_status_text(
         if cfg.capture_enabled {
             "统计运行中"
@@ -595,24 +656,19 @@ fn run() -> anyhow::Result<()> {
     ui.set_export_text("未导出".into());
     ui.set_export_from_date(date.clone().into());
     ui.set_export_to_date(date.clone().into());
-    ui.set_detail_text("请输入应用完整路径查询详情。".into());
+    ui.set_detail_text("".into());
     let startup_matches = std::env::current_exe()
         .ok()
         .and_then(|exe| config::startup::windows::is_configured(&exe).ok())
         .unwrap_or(false);
     let initial_policy_summary = policy_summary(&db.lock().expect("database mutex poisoned"));
+    ui.set_policies_text(initial_policy_summary.into());
     ui.set_settings_text(
-        format!(
-            "数据目录: {}\n数据库: stats.db (WAL)\n版本: {}{}\n当前应用策略:\n{}",
-            dir.display(),
-            env!("CARGO_PKG_VERSION"),
-            if cfg.start_with_windows && !startup_matches {
-                "\n启动项路径与当前 EXE 不一致，请重新启用。"
-            } else {
-                ""
-            },
-            initial_policy_summary
-        )
+        if cfg.start_with_windows && !startup_matches {
+            "启动项路径与当前 EXE 不一致，请重新启用。"
+        } else {
+            "可从应用详情直接带入路径，修改采集策略。"
+        }
         .into(),
     );
     ui.set_startup_text(
@@ -742,16 +798,18 @@ fn run() -> anyhow::Result<()> {
     });
     let ui_for_ranking = ui.as_weak();
     let db_for_ranking = Arc::clone(&db);
-    ui.on_ranking_app_clicked(move |item| {
+    ui.on_ranking_app_clicked(move |path| {
         let Some(ui) = ui_for_ranking.upgrade() else {
             return;
         };
-        if let Some(path) = ranking_path(item.as_str()) {
-            ui.set_detail_path(path.into());
-            ui.set_policy_path(path.into());
+        if !path.is_empty() {
+            ui.set_detail_path(path.clone());
+            ui.set_app_query_path(path.clone());
+            ui.set_policy_path(path.clone());
             let date = ui.get_date_text().to_string();
             if let Ok(database) = db_for_ranking.lock() {
-                let _ = refresh_detail(&ui, &database, &date, path);
+                let _ = refresh_detail(&ui, &database, &date, path.as_str());
+                let _ = refresh_heatmap(&ui, &database, &date);
             }
             ui.set_status_text("已打开应用详情".into());
         }
@@ -760,12 +818,13 @@ fn run() -> anyhow::Result<()> {
     let ui_for_detail = ui.as_weak();
     ui.on_query_app_clicked(move || {
         if let Some(ui) = ui_for_detail.upgrade() {
-            let path = ui.get_detail_path().to_string();
+            let path = ui.get_app_query_path().to_string();
             let date = ui.get_date_text().to_string();
             if path.trim().is_empty() {
                 ui.set_detail_text("请输入应用完整路径查询详情。".into());
             } else if let Ok(database) = db_for_detail.lock() {
                 let _ = refresh_detail(&ui, &database, &date, path.trim());
+                let _ = refresh_heatmap(&ui, &database, &date);
             }
         }
     });
@@ -780,15 +839,20 @@ fn run() -> anyhow::Result<()> {
                 let database = db_for_policy.lock().expect("database mutex poisoned");
                 let result = database.set_policy(path.trim(), mode.as_str());
                 match result {
-                    Ok(()) => ui.set_settings_text(
-                        format!(
-                            "已设置 {} 的采集策略为 {}。\n当前应用策略:\n{}",
-                            path.trim(),
-                            mode.as_str(),
-                            policy_summary(&database)
-                        )
-                        .into(),
-                    ),
+                    Ok(()) => {
+                        ui.set_settings_text("应用采集策略已更新。".into());
+                        ui.set_policies_text(policy_summary(&database).into());
+                        let date = ui.get_date_text().to_string();
+                        if ui.get_detail_loaded() {
+                            let _ = refresh_detail(
+                                &ui,
+                                &database,
+                                &date,
+                                ui.get_detail_path().as_str(),
+                            );
+                        }
+                        let _ = refresh_heatmap(&ui, &database, &date);
+                    }
                     Err(error) => ui.set_settings_text(format!("设置策略失败：{error}").into()),
                 }
             }
@@ -806,6 +870,20 @@ fn run() -> anyhow::Result<()> {
         let set_policy = Arc::clone(&set_policy);
         move || set_policy(CaptureMode::Excluded)
     });
+    let heatmap_ui = ui.as_weak();
+    let heatmap_db = Arc::clone(&db);
+    let refresh_scope = Arc::new(move || {
+        if let Some(ui) = heatmap_ui.upgrade()
+            && let Ok(database) = heatmap_db.lock()
+        {
+            let _ = refresh_heatmap(&ui, &database, ui.get_date_text().as_str());
+        }
+    });
+    ui.on_heatmap_all_clicked({
+        let refresh_scope = Arc::clone(&refresh_scope);
+        move || refresh_scope()
+    });
+    ui.on_heatmap_app_clicked(move || refresh_scope());
     let startup_config = Arc::clone(&config_state);
     let startup_ui = ui.as_weak();
     let startup_exe = std::env::current_exe().ok();
@@ -876,6 +954,7 @@ fn run() -> anyhow::Result<()> {
             return;
         };
         if !clear_pending_for_ui.swap(true, Ordering::Relaxed) {
+            ui.set_clear_confirmation(true);
             ui.set_clear_button_text("再次点击确认清空".into());
             ui.set_settings_text("清空操作不可撤销，请再次点击确认。".into());
             return;
@@ -896,9 +975,13 @@ fn run() -> anyhow::Result<()> {
             Err(anyhow::anyhow!("统计线程已停止"))
         };
         clear_pending_for_ui.store(false, Ordering::Relaxed);
+        ui.set_clear_confirmation(false);
         ui.set_clear_button_text("清空统计数据".into());
         match result {
             Ok(()) => {
+                ui.set_detail_loaded(false);
+                ui.set_detail_path("".into());
+                ui.set_heatmap_scope(0);
                 let date = ui.get_date_text().to_string();
                 if let Ok(database) = clear_db.lock() {
                     let _ = refresh_overview(
@@ -908,10 +991,18 @@ fn run() -> anyhow::Result<()> {
                         *clear_sort.lock().expect("ranking state poisoned"),
                     );
                 }
-                ui.set_detail_text("请输入应用完整路径查询详情。".into());
+                ui.set_detail_text("".into());
                 ui.set_settings_text("统计数据已清空。".into());
             }
             Err(error) => ui.set_settings_text(format!("清空失败：{error}").into()),
+        }
+    });
+    let cancel_ui = ui.as_weak();
+    ui.on_clear_cancel_clicked(move || {
+        clear_pending.store(false, Ordering::Relaxed);
+        if let Some(ui) = cancel_ui.upgrade() {
+            ui.set_clear_confirmation(false);
+            ui.set_clear_button_text("清空统计数据".into());
         }
     });
     let pause_config = Arc::clone(&config_state);
@@ -925,6 +1016,7 @@ fn run() -> anyhow::Result<()> {
             }
         }
         if let Some(ui) = ui_for_state.upgrade() {
+            ui.set_capture_active(value);
             ui.set_status_text(
                 if value {
                     "统计运行中"
@@ -985,6 +1077,9 @@ fn run() -> anyhow::Result<()> {
         match command {
             tray::Command::Open | tray::Command::Settings => {
                 if let Some(ui) = tray_ui.upgrade() {
+                    if command == tray::Command::Settings {
+                        ui.set_selected_page(3);
+                    }
                     let date = ui.get_date_text().to_string();
                     if let Ok(database) = tray_db.lock()
                         && let Err(error) = refresh_overview(
@@ -997,6 +1092,7 @@ fn run() -> anyhow::Result<()> {
                         ui.set_status_text(format!("查询失败：{error}").into());
                     }
                     let _ = ui.show();
+                    ui.window().set_minimized(false);
                 }
             }
             tray::Command::TogglePause => {
@@ -1009,6 +1105,7 @@ fn run() -> anyhow::Result<()> {
                     }
                 }
                 if let Some(ui) = tray_ui.upgrade() {
+                    ui.set_capture_active(value);
                     ui.set_status_text(
                         if value {
                             "统计运行中"

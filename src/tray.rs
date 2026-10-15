@@ -20,6 +20,17 @@ pub fn take_request() -> Option<Command> {
     }
 }
 #[cfg(windows)]
+pub fn activate_existing() -> bool {
+    use windows::Win32::Foundation::{LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, PostMessageW, WM_APP};
+    use windows::core::w;
+    unsafe {
+        FindWindowW(w!("kb_count_tray"), w!("kb_count_tray_window"))
+            .and_then(|window| PostMessageW(window, WM_APP + 2, WPARAM(0), LPARAM(0)))
+            .is_ok()
+    }
+}
+#[cfg(windows)]
 pub fn start(enabled: Arc<AtomicBool>) {
     let _ = CAPTURE_ENABLED.set(enabled);
     thread::Builder::new()
@@ -105,7 +116,9 @@ extern "system" fn proc(
     l: windows::Win32::Foundation::LPARAM,
 ) -> windows::Win32::Foundation::LRESULT {
     unsafe {
-        if msg == windows::Win32::UI::WindowsAndMessaging::WM_APP + 1 {
+        if msg == windows::Win32::UI::WindowsAndMessaging::WM_APP + 2 {
+            REQUEST.store(1, Ordering::Release);
+        } else if msg == windows::Win32::UI::WindowsAndMessaging::WM_APP + 1 {
             match l.0 as u32 {
                 windows::Win32::UI::WindowsAndMessaging::WM_LBUTTONDBLCLK => {
                     REQUEST.store(1, Ordering::Release)

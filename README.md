@@ -49,6 +49,25 @@ cargo build --release --locked
 
 如果双击后看不到窗口，请先检查系统托盘的隐藏图标区域；这是默认后台运行行为。若目录无写入权限，程序会提示将 EXE 移动到具有读写权限的目录，不会改写到 AppData。如果托盘菜单显示“恢复统计”，说明当前处于全局暂停状态；点击后才会继续采集。该状态保存在同目录的 `config.toml`，其中 `capture_enabled = true` 表示运行中。
 
+## 统计面板
+
+- **输入总览**：四项核心指标、可排序的完整应用排行和输入占比，点击应用行进入详情。
+- **键位分布**：常用主键区及 Esc/F1–F12 热力图、完整按键列表、鼠标与滚轮分类；可切换全部应用和当前应用。
+- **应用详情**：独立显示应用路径、采集方式、三项总量和分类列表；仅总量模式明确提示未记录详细数据。
+- **设置与数据**：主题、开机启动、应用策略、CSV 范围导出和本地存储；清空确认可取消，离开设置页时会取消确认。
+
+窗口支持浅色/深色主题，最小内容尺寸为 960 × 680。统计刷新保留正在编辑的日期、导出范围和应用查询路径。重复启动通过现有进程的 Slint 事件循环打开面板，避免直接显示原生隐藏窗口导致白屏。Release 默认不附带控制台窗口。
+
+界面回归测试使用内存 SQLite 和 Slint 软件渲染器，不启动输入采集，也不读取个人统计数据。可在 PowerShell 中生成离线预览（样例聚合数据）：
+
+```powershell
+$env:KB_COUNT_RENDER_UI = '1'
+cargo test --locked ui_tests -- --nocapture
+Remove-Item Env:KB_COUNT_RENDER_UI
+```
+
+预览位于忽略的 `target/ui-review/`，覆盖四页的深浅主题、最小窗口、空数据和仅总量模式；测试也检查日期草稿、筛选、应用行导航与隐私显示规则。
+
 ## 当前限制
 
 Windows 10/11 长时间资源占用测试仍需补齐。当前构建、启动、单实例、数据库策略和单元测试已通过；Windows 11 实体鼠标的左键、右键及垂直滚轮已验证到 SQLite，其他按钮和水平滚轮仍需对应设备实测。
@@ -57,7 +76,7 @@ Windows 10/11 长时间资源占用测试仍需补齐。当前构建、启动、
 
 ## 输入采集诊断
 
-启动后控制台应出现类似日志：
+Debug 构建的控制台会出现类似日志（Release 默认不显示控制台）：
 
 ```text
 INFO kb_count::collector::raw_input: Raw Input mouse and keyboard collector started raw_input_registered=true mouse_raw_input_registered=true keyboard_raw_input_registered=true low_level_keyboard_hook=true
@@ -78,7 +97,7 @@ INFO kb_count::collector::raw_input: mouse input diagnostic summary raw_input_me
 
 ## 本机 Release 资源实测
 
-测试环境为 Windows 11 专业工作站版 10.0.26200、16 个逻辑处理器，使用当前 Release 在无输入状态下预热 3 秒后用 PowerShell 每秒采样 10 秒。后台隐藏运行时，私有内存平均 69.95 MiB（69.89–70.53 MiB），工作集平均 65.91 MiB（65.90–65.91 MiB），按进程 CPU 时间折算的全机平均 CPU 约 0.0386%。打开统计窗口后采样 10 秒，私有内存平均 69.70 MiB，工作集平均 65.93 MiB，全机平均 CPU 约 0.0097%。当前 Release EXE 约 11.38 MiB。该结果只代表本机短时测试，不是所有 Windows 10/11 设备的性能承诺。
+以下是界面改版前的短时参考，改版后的资源占用仍需重新实机测量。测试环境为 Windows 11 专业工作站版 10.0.26200、16 个逻辑处理器，在无输入状态下预热 3 秒后用 PowerShell 每秒采样 10 秒。后台隐藏运行时，私有内存平均 69.95 MiB（69.89–70.53 MiB），工作集平均 65.91 MiB（65.90–65.91 MiB），全机平均 CPU 约 0.0386%。打开统计窗口后采样 10 秒，私有内存平均 69.70 MiB，工作集平均 65.93 MiB，全机平均 CPU 约 0.0097%。该结果不是所有 Windows 10/11 设备的性能承诺。
 
 
 
