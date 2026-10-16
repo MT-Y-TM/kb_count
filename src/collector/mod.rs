@@ -4,11 +4,14 @@ use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
 
-pub fn start(enabled: Arc<AtomicBool>) -> Receiver<InputEvent> {
+pub fn start(
+    enabled: Arc<AtomicBool>,
+    diagnostics: Option<std::path::PathBuf>,
+) -> Receiver<InputEvent> {
     let (tx, rx) = mpsc::sync_channel(8192);
     thread::Builder::new()
         .name("kb-input-collector".into())
-        .spawn(move || raw_input::run(tx, enabled))
+        .spawn(move || raw_input::run(tx, enabled, diagnostics))
         .expect("unable to start collector");
     rx
 }
@@ -81,6 +84,7 @@ mod raw_input {
     static CAPTURE_ENABLED: OnceLock<Arc<AtomicBool>> = OnceLock::new();
     static PROCESS_CACHE: OnceLock<Mutex<HashMap<u32, ProcessCacheEntry>>> = OnceLock::new();
     static PRESSED_KEYS: OnceLock<Mutex<HashSet<u32>>> = OnceLock::new();
+    static RAW_PRESSED_KEYS: OnceLock<Mutex<HashSet<(usize, u32)>>> = OnceLock::new();
     static WHEEL_REMAINDER: OnceLock<Mutex<HashMap<String, (i32, i32)>>> = OnceLock::new();
     static DROPPED_EVENTS: AtomicU64 = AtomicU64::new(0);
     static FIRST_KEYBOARD_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -94,6 +98,15 @@ mod raw_input {
     static MOUSE_EVENTS_ENQUEUED: AtomicU64 = AtomicU64::new(0);
     static MOUSE_EVENTS_DROPPED: AtomicU64 = AtomicU64::new(0);
     static MOUSE_UNKNOWN_ATTRIBUTION: AtomicU64 = AtomicU64::new(0);
+    static RAW_KEYBOARD_PACKETS: AtomicU64 = AtomicU64::new(0);
+    static KEYBOARD_EVENTS_ENQUEUED: AtomicU64 = AtomicU64::new(0);
+    static KEYBOARD_UNKNOWN_ATTRIBUTION: AtomicU64 = AtomicU64::new(0);
+    static HOOK_KEYBOARD_MESSAGES: AtomicU64 = AtomicU64::new(0);
+    static PROCESS_QUERY_FAILURES: AtomicU64 = AtomicU64::new(0);
+    static MOUSE_CAPTURE_ATTRIBUTION: AtomicU64 = AtomicU64::new(0);
+    static MOUSE_FULLSCREEN_ATTRIBUTION: AtomicU64 = AtomicU64::new(0);
+    static REGISTRATION_REPAIRS: AtomicU64 = AtomicU64::new(0);
+    static DIAGNOSTICS_SENDER: OnceLock<SyncSender<InputDiagnostics>> = OnceLock::new();
     const RI_MOUSE_WHEEL: u16 = 0x0400;
     const RI_MOUSE_HWHEEL: u16 = 0x0800;
     const RI_MOUSE_BUTTON_4_DOWN: u16 = 0x0040;
@@ -109,9 +122,16 @@ mod raw_input {
     const RI_KEY_E0: u16 = 0x02;
     const RI_KEY_E1: u16 = 0x04;
 
-    pub fn run(tx: SyncSender<InputEvent>, enabled: Arc<AtomicBool>) {
+    pub fn run(
+        tx: SyncSender<InputEvent>,
+        enabled: Arc<AtomicBool>,
+        diagnostics: Option<std::path::PathBuf>,
+    ) {
         let _ = SENDER.set(tx);
         let _ = CAPTURE_ENABLED.set(enabled);
+        if let Some(path) = diagnostics {
+            start_diagnostic_writer(path);
+        }
         unsafe {
             let instance = GetModuleHandleW(None).expect("module handle");
             let class = WNDCLASSW {
@@ -182,32 +202,33 @@ mod raw_input {
                 }
             };
             let raw_input_registered = mouse_raw_input_registered && keyboard_raw_input_registered;
-            let keyboard_hook: Option<HHOOK> = match SetWindowsHookExW(
-                WH_KEYBOARD_LL,
-                Some(keyboard_hook),
-                None,
-                0,
-            ) {
-                Ok(hook) => Some(hook),
-                Err(error) => {
-                    USE_RAW_KEYBOARD.store(true, Ordering::Release);
-                    tracing::error!(
-                        %error,
-                        "SetWindowsHookExW keyboard hook failed; using Raw Input keyboard fallback"
-                    );
-                    None
-                }
-            };
+            // A successfully installed hook can still miss an elevated game's
+            // input. Prefer the registered hardware stream, never count both.
+            USE_RAW_KEYBOARD.store(keyboard_raw_input_registered, Ordering::Release);
+            let keyboard_hook: Option<HHOOK> =
+                match SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), None, 0) {
+                    Ok(hook) => Some(hook),
+                    Err(error) => {
+                        tracing::error!(
+                            %error,
+                            keyboard_raw_input_registered,
+                            "keyboard fallback hook unavailable"
+                        );
+                        None
+                    }
+                };
             tracing::info!(
                 raw_input_registered,
                 mouse_raw_input_registered,
                 keyboard_raw_input_registered,
                 low_level_keyboard_hook = keyboard_hook.is_some(),
+                raw_keyboard_primary = USE_RAW_KEYBOARD.load(Ordering::Acquire),
                 "Raw Input mouse and keyboard collector started"
             );
             if SetTimer(hwnd, 1, 10_000, None) == 0 {
                 tracing::warn!("unable to start mouse input diagnostic timer");
             }
+            log_diagnostics(hwnd);
             let mut msg = MSG::default();
             while GetMessageW(&mut msg, None, 0, 0).into() {
                 let _ = TranslateMessage(&msg);
@@ -223,6 +244,12 @@ mod raw_input {
 
     #[allow(unsafe_op_in_unsafe_fn)]
     unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        if code >= 0 {
+            HOOK_KEYBOARD_MESSAGES.fetch_add(1, Ordering::Relaxed);
+        }
+        if USE_RAW_KEYBOARD.load(Ordering::Acquire) {
+            return CallNextHookEx(None, code, wparam, lparam);
+        }
         if code >= 0 && (wparam.0 as u32 == WM_KEYDOWN || wparam.0 as u32 == WM_SYSKEYDOWN) {
             let data = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
             if data.flags.0 & LLKHF_INJECTED.0 == 0 {
@@ -298,7 +325,15 @@ mod raw_input {
                 handle_input(hwnd, lparam);
             }
         } else if msg == WM_TIMER {
+            repair_registration(hwnd);
             log_diagnostics(hwnd);
+        } else if msg == windows::Win32::UI::WindowsAndMessaging::WM_INPUT_DEVICE_CHANGE {
+            if let Some(pressed) = RAW_PRESSED_KEYS.get() {
+                pressed
+                    .lock()
+                    .expect("raw keyboard state poisoned")
+                    .retain(|(device, _)| *device != lparam.0 as usize);
+            }
         } else if msg == WM_POWERBROADCAST {
             reset_input_state();
         }
@@ -312,14 +347,116 @@ mod raw_input {
 
     #[allow(unsafe_op_in_unsafe_fn)]
     unsafe fn point_process() -> (String, String) {
+        use windows::Win32::Foundation::RECT;
+        use windows::Win32::Graphics::Gdi::{
+            GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
+        };
+        use windows::Win32::UI::WindowsAndMessaging::{
+            CURSOR_SHOWING, CURSORINFO, GUITHREADINFO, GetCursorInfo, GetDesktopWindow,
+            GetGUIThreadInfo, GetShellWindow, GetWindowRect, IsIconic, IsWindowVisible,
+        };
+        let foreground = GetForegroundWindow();
+        let mut info = GUITHREADINFO {
+            cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+            ..Default::default()
+        };
+        let captured = if GetGUIThreadInfo(0, &mut info).is_ok() {
+            info.hwndCapture
+        } else {
+            HWND::default()
+        };
         let mut point = windows::Win32::Foundation::POINT::default();
-        if GetCursorPos(&mut point).is_err() {
-            return ("Unknown".into(), "Unknown".into());
+        let pointed = GetCursorPos(&mut point).ok().map(|_| {
+            let hwnd = WindowFromPoint(point);
+            let root = GetAncestor(hwnd, GA_ROOT);
+            (if root.0.is_null() { hwnd } else { root }, point)
+        });
+        let mut window = RECT::default();
+        let mut monitor = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        let mut cursor = CURSORINFO {
+            cbSize: std::mem::size_of::<CURSORINFO>() as u32,
+            ..Default::default()
+        };
+        // A fullscreen browser/desktop with a visible pointer still uses the
+        // pointed window. Prefer the game only while its cursor is hidden.
+        let fullscreen = (!foreground.0.is_null()
+            && foreground != GetShellWindow()
+            && foreground != GetDesktopWindow()
+            && IsWindowVisible(foreground).as_bool()
+            && !IsIconic(foreground).as_bool()
+            && GetCursorInfo(&mut cursor).is_ok()
+            && cursor.flags.0 & CURSOR_SHOWING.0 == 0
+            && GetWindowRect(foreground, &mut window).is_ok()
+            && GetMonitorInfoW(
+                MonitorFromWindow(foreground, MONITOR_DEFAULTTONEAREST),
+                &mut monitor,
+            )
+            .as_bool()
+            && covers_monitor(window, monitor.rcMonitor))
+        .then_some(window);
+        let (target, reason) = mouse_target(foreground, captured, fullscreen, pointed);
+        match reason {
+            MouseTargetReason::Capture => {
+                MOUSE_CAPTURE_ATTRIBUTION.fetch_add(1, Ordering::Relaxed);
+            }
+            MouseTargetReason::Fullscreen => {
+                MOUSE_FULLSCREEN_ATTRIBUTION.fetch_add(1, Ordering::Relaxed);
+            }
+            _ => {}
         }
-        let hwnd = WindowFromPoint(point);
-        let root = GetAncestor(hwnd, GA_ROOT);
-        let root = if root.0.is_null() { hwnd } else { root };
-        process_for_window(root)
+        process_for_window(target)
+    }
+
+    #[derive(Debug, PartialEq)]
+    enum MouseTargetReason {
+        Capture,
+        Fullscreen,
+        Point,
+        Unknown,
+    }
+
+    fn covers_monitor(
+        window: windows::Win32::Foundation::RECT,
+        monitor: windows::Win32::Foundation::RECT,
+    ) -> bool {
+        monitor.right > monitor.left
+            && monitor.bottom > monitor.top
+            && window.left <= monitor.left
+            && window.top <= monitor.top
+            && window.right >= monitor.right
+            && window.bottom >= monitor.bottom
+    }
+
+    fn mouse_target(
+        foreground: HWND,
+        captured: HWND,
+        fullscreen: Option<windows::Win32::Foundation::RECT>,
+        pointed: Option<(HWND, windows::Win32::Foundation::POINT)>,
+    ) -> (HWND, MouseTargetReason) {
+        if !captured.0.is_null() {
+            return (captured, MouseTargetReason::Capture);
+        }
+        if !foreground.0.is_null()
+            && fullscreen.is_some_and(|bounds| {
+                pointed.is_none_or(|(_, point)| {
+                    point.x >= bounds.left
+                        && point.x < bounds.right
+                        && point.y >= bounds.top
+                        && point.y < bounds.bottom
+                })
+            })
+        {
+            return (foreground, MouseTargetReason::Fullscreen);
+        }
+        if let Some((hwnd, _)) = pointed
+            && !hwnd.0.is_null()
+        {
+            return (hwnd, MouseTargetReason::Point);
+        }
+        (HWND::default(), MouseTargetReason::Unknown)
     }
 
     #[allow(unsafe_op_in_unsafe_fn)]
@@ -339,6 +476,7 @@ mod raw_input {
             return (name, path);
         }
         let Ok(process) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
+            PROCESS_QUERY_FAILURES.fetch_add(1, Ordering::Relaxed);
             return ("Unknown".into(), "Unknown".into());
         };
         let mut buffer = vec![0u16; 32768];
@@ -353,6 +491,7 @@ mod raw_input {
         {
             String::from_utf16_lossy(&buffer[..len as usize])
         } else {
+            PROCESS_QUERY_FAILURES.fetch_add(1, Ordering::Relaxed);
             "Unknown".into()
         };
         let _ = CloseHandle(process);
@@ -369,6 +508,9 @@ mod raw_input {
     }
 
     fn reset_input_state() {
+        if let Some(pressed) = RAW_PRESSED_KEYS.get() {
+            pressed.lock().expect("raw keyboard state poisoned").clear();
+        }
         if let Some(pressed) = PRESSED_KEYS.get() {
             pressed.lock().expect("keyboard state poisoned").clear();
         }
@@ -388,7 +530,7 @@ mod raw_input {
             .unwrap_or(true)
     }
 
-    fn mouse_registration_target_matches(hwnd: HWND) -> Option<bool> {
+    fn registration_target_matches(hwnd: HWND, usage: u16) -> Option<bool> {
         let mut devices: [RAWINPUTDEVICE; 16] = std::array::from_fn(|_| RAWINPUTDEVICE::default());
         let mut capacity = devices.len() as u32;
         let count = unsafe {
@@ -398,17 +540,49 @@ mod raw_input {
                 std::mem::size_of::<RAWINPUTDEVICE>() as u32,
             )
         };
-        if count == u32::MAX {
+        if count == u32::MAX || count as usize > devices.len() {
             return None;
         }
         Some(devices[..count as usize].iter().any(|device| {
-            device.usUsagePage == 0x01 && device.usUsage == 0x02 && device.hwndTarget == hwnd
+            device.usUsagePage == 0x01
+                && device.usUsage == usage
+                && device.hwndTarget == hwnd
+                && device.dwFlags.contains(RIDEV_INPUTSINK)
         }))
+    }
+
+    fn repair_registration(hwnd: HWND) {
+        for usage in [0x02, 0x06] {
+            if registration_target_matches(hwnd, usage) != Some(false) {
+                continue;
+            }
+            let device = RAWINPUTDEVICE {
+                usUsagePage: 0x01,
+                usUsage: usage,
+                dwFlags: RIDEV_INPUTSINK | RIDEV_DEVNOTIFY,
+                hwndTarget: hwnd,
+            };
+            if unsafe {
+                RegisterRawInputDevices(&[device], std::mem::size_of::<RAWINPUTDEVICE>() as u32)
+            }
+            .is_ok()
+            {
+                REGISTRATION_REPAIRS.fetch_add(1, Ordering::Relaxed);
+                if usage == 0x06 && !USE_RAW_KEYBOARD.swap(true, Ordering::AcqRel) {
+                    reset_input_state();
+                }
+            }
+        }
     }
 
     fn log_diagnostics(hwnd: HWND) {
         tracing::info!(
-            mouse_registration_target_matches = ?mouse_registration_target_matches(hwnd),
+            mouse_registration_target_matches = ?registration_target_matches(hwnd, 0x02),
+            keyboard_registration_target_matches = ?registration_target_matches(hwnd, 0x06),
+            raw_keyboard_primary = USE_RAW_KEYBOARD.load(Ordering::Acquire),
+            raw_keyboard_packets = RAW_KEYBOARD_PACKETS.load(Ordering::Relaxed),
+            keyboard_events_enqueued = KEYBOARD_EVENTS_ENQUEUED.load(Ordering::Relaxed),
+            keyboard_unknown_attribution = KEYBOARD_UNKNOWN_ATTRIBUTION.load(Ordering::Relaxed),
             raw_input_messages = RAW_INPUT_MESSAGES.load(Ordering::Relaxed),
             raw_input_data_errors = RAW_INPUT_DATA_ERRORS.load(Ordering::Relaxed),
             raw_mouse_packets = RAW_MOUSE_PACKETS.load(Ordering::Relaxed),
@@ -417,8 +591,142 @@ mod raw_input {
             mouse_events_enqueued = MOUSE_EVENTS_ENQUEUED.load(Ordering::Relaxed),
             mouse_events_dropped = MOUSE_EVENTS_DROPPED.load(Ordering::Relaxed),
             mouse_unknown_attribution = MOUSE_UNKNOWN_ATTRIBUTION.load(Ordering::Relaxed),
-            "mouse input diagnostic summary"
+            "input diagnostic summary"
         );
+        write_diagnostics(hwnd);
+    }
+
+    #[derive(Default, serde::Serialize)]
+    struct InputDiagnostics {
+        version: &'static str,
+        process_elevation: &'static str,
+        capture_enabled: bool,
+        raw_keyboard_primary: bool,
+        keyboard_registration: &'static str,
+        mouse_registration: &'static str,
+        raw_input_messages: u64,
+        raw_input_data_errors: u64,
+        raw_keyboard_packets: u64,
+        hook_keyboard_messages: u64,
+        keyboard_events_enqueued: u64,
+        keyboard_unknown_attribution: u64,
+        raw_mouse_packets: u64,
+        mouse_button_packets: u64,
+        mouse_wheel_packets: u64,
+        mouse_events_enqueued: u64,
+        mouse_unknown_attribution: u64,
+        mouse_capture_attribution: u64,
+        mouse_fullscreen_attribution: u64,
+        process_query_failures: u64,
+        dropped_events: u64,
+        registration_repairs: u64,
+    }
+
+    fn write_diagnostics(hwnd: HWND) {
+        let Some(sender) = DIAGNOSTICS_SENDER.get() else {
+            return;
+        };
+        let registration = |usage| match registration_target_matches(hwnd, usage) {
+            Some(true) => "collector",
+            Some(false) => "other_or_missing",
+            None => "unavailable",
+        };
+        let _ = sender.try_send(InputDiagnostics {
+            version: env!("CARGO_PKG_VERSION"),
+            process_elevation: process_elevation(),
+            capture_enabled: capture_enabled(),
+            raw_keyboard_primary: USE_RAW_KEYBOARD.load(Ordering::Acquire),
+            keyboard_registration: registration(0x06),
+            mouse_registration: registration(0x02),
+            raw_input_messages: RAW_INPUT_MESSAGES.load(Ordering::Relaxed),
+            raw_input_data_errors: RAW_INPUT_DATA_ERRORS.load(Ordering::Relaxed),
+            raw_keyboard_packets: RAW_KEYBOARD_PACKETS.load(Ordering::Relaxed),
+            hook_keyboard_messages: HOOK_KEYBOARD_MESSAGES.load(Ordering::Relaxed),
+            keyboard_events_enqueued: KEYBOARD_EVENTS_ENQUEUED.load(Ordering::Relaxed),
+            keyboard_unknown_attribution: KEYBOARD_UNKNOWN_ATTRIBUTION.load(Ordering::Relaxed),
+            raw_mouse_packets: RAW_MOUSE_PACKETS.load(Ordering::Relaxed),
+            mouse_button_packets: RAW_MOUSE_BUTTON_PACKETS.load(Ordering::Relaxed),
+            mouse_wheel_packets: RAW_MOUSE_WHEEL_PACKETS.load(Ordering::Relaxed),
+            mouse_events_enqueued: MOUSE_EVENTS_ENQUEUED.load(Ordering::Relaxed),
+            mouse_unknown_attribution: MOUSE_UNKNOWN_ATTRIBUTION.load(Ordering::Relaxed),
+            mouse_capture_attribution: MOUSE_CAPTURE_ATTRIBUTION.load(Ordering::Relaxed),
+            mouse_fullscreen_attribution: MOUSE_FULLSCREEN_ATTRIBUTION.load(Ordering::Relaxed),
+            process_query_failures: PROCESS_QUERY_FAILURES.load(Ordering::Relaxed),
+            dropped_events: DROPPED_EVENTS.load(Ordering::Relaxed),
+            registration_repairs: REGISTRATION_REPAIRS.load(Ordering::Relaxed),
+        });
+    }
+
+    fn start_diagnostic_writer(path: std::path::PathBuf) {
+        let (sender, receiver) = mpsc::sync_channel::<InputDiagnostics>(1);
+        if let Err(error) = thread::Builder::new()
+            .name("kb-input-diagnostics".into())
+            .spawn(move || {
+                let mut previous = String::new();
+                let mut reported_error = false;
+                for snapshot in receiver {
+                    let Ok(text) = toml::to_string_pretty(&snapshot) else {
+                        continue;
+                    };
+                    if text == previous {
+                        continue;
+                    }
+                    let result = path
+                        .parent()
+                        .map(std::fs::create_dir_all)
+                        .transpose()
+                        .and_then(|_| std::fs::write(&path, &text));
+                    match result {
+                        Ok(()) => {
+                            previous = text;
+                            reported_error = false;
+                        }
+                        Err(error) if !reported_error => {
+                            reported_error = true;
+                            tracing::warn!(%error, "unable to save aggregate input diagnostics");
+                        }
+                        Err(_) => {}
+                    }
+                }
+            })
+        {
+            tracing::warn!(%error, "unable to start aggregate diagnostics writer");
+        } else {
+            let _ = DIAGNOSTICS_SENDER.set(sender);
+        }
+    }
+
+    fn process_elevation() -> &'static str {
+        static VALUE: OnceLock<&'static str> = OnceLock::new();
+        VALUE.get_or_init(|| unsafe {
+            use windows::Win32::Foundation::HANDLE;
+            use windows::Win32::Security::{
+                GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
+            };
+            use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+            let mut token = HANDLE::default();
+            if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).is_err() {
+                return "unavailable";
+            }
+            let mut elevation = TOKEN_ELEVATION::default();
+            let mut returned = 0;
+            let size = std::mem::size_of::<TOKEN_ELEVATION>() as u32;
+            let result = GetTokenInformation(
+                token,
+                TokenElevation,
+                Some((&mut elevation as *mut TOKEN_ELEVATION).cast()),
+                size,
+                &mut returned,
+            );
+            let _ = CloseHandle(token);
+            if result.is_err() || returned < size {
+                "unavailable"
+            } else if elevation.TokenIsElevated != 0 {
+                "elevated"
+            } else {
+                "standard"
+            }
+        })
     }
     #[allow(clippy::too_many_arguments)]
     fn emit_event(
@@ -459,6 +767,9 @@ mod raw_input {
             });
             if result.is_ok() && input_type == "mouse" {
                 MOUSE_EVENTS_ENQUEUED.fetch_add(1, Ordering::Relaxed);
+            }
+            if result.is_ok() && input_type == "keyboard" {
+                KEYBOARD_EVENTS_ENQUEUED.fetch_add(1, Ordering::Relaxed);
             }
             if result.is_err() {
                 let dropped = DROPPED_EVENTS.fetch_add(1, Ordering::Relaxed) + 1;
@@ -536,6 +847,30 @@ mod raw_input {
         pressed.insert(key_id)
     }
 
+    fn normalize_raw_key(
+        pressed: &mut HashSet<(usize, u32)>,
+        device: usize,
+        key: RAWKEYBOARD,
+    ) -> bool {
+        if key.MakeCode == 0xff || key.VKey == 0xff {
+            return false;
+        }
+        // Pause can have no matching break event and does not auto-repeat.
+        if key.VKey == 0x13 {
+            return key.Flags & RI_KEY_BREAK == 0;
+        }
+        let id = (
+            device,
+            (u32::from(key.MakeCode) << 3) | u32::from(key.Flags & (RI_KEY_E0 | RI_KEY_E1)),
+        );
+        if key.Flags & RI_KEY_BREAK != 0 {
+            pressed.remove(&id);
+            false
+        } else {
+            pressed.insert(id)
+        }
+    }
+
     #[allow(unsafe_op_in_unsafe_fn)]
     unsafe fn handle_input(_hwnd: HWND, lparam: LPARAM) {
         RAW_INPUT_MESSAGES.fetch_add(1, Ordering::Relaxed);
@@ -570,22 +905,23 @@ mod raw_input {
                 RAW_INPUT_DATA_ERRORS.fetch_add(1, Ordering::Relaxed);
                 return;
             }
+            RAW_KEYBOARD_PACKETS.fetch_add(1, Ordering::Relaxed);
             if !USE_RAW_KEYBOARD.load(Ordering::Acquire) {
                 return;
             }
-            let date = Local::now();
             let k = raw.data.keyboard;
-            let key_id =
-                (u32::from(k.MakeCode) << 1) | u32::from(k.Flags & (RI_KEY_E0 | RI_KEY_E1) != 0);
-            if k.Flags & RI_KEY_BREAK == 0 {
-                let pressed = PRESSED_KEYS.get_or_init(|| Mutex::new(HashSet::new()));
-                let mut pressed = pressed.lock().expect("keyboard state poisoned");
-                let physically_down = GetAsyncKeyState(k.VKey as i32) < 0;
-                if !should_count_keydown(&mut pressed, key_id, physically_down) {
-                    return;
-                }
-                drop(pressed);
+            let pressed = RAW_PRESSED_KEYS.get_or_init(|| Mutex::new(HashSet::new()));
+            let count = normalize_raw_key(
+                &mut pressed.lock().expect("raw keyboard state poisoned"),
+                raw.header.hDevice.0 as usize,
+                k,
+            );
+            if count && capture_enabled() {
+                let date = Local::now();
                 let (app_name, app_path) = foreground_process();
+                if app_path == "Unknown" {
+                    KEYBOARD_UNKNOWN_ATTRIBUTION.fetch_add(1, Ordering::Relaxed);
+                }
                 emit_event(
                     date,
                     app_name,
@@ -601,11 +937,6 @@ mod raw_input {
                     0,
                     0,
                 );
-            } else if let Some(pressed) = PRESSED_KEYS.get() {
-                pressed
-                    .lock()
-                    .expect("keyboard state poisoned")
-                    .remove(&key_id);
             }
             return;
         }
@@ -685,6 +1016,233 @@ mod raw_input {
             RI_MOUSE_WHEEL,
         };
         use std::collections::HashSet;
+
+        fn key(scan: u16, flags: u16) -> super::RAWKEYBOARD {
+            super::RAWKEYBOARD {
+                MakeCode: scan,
+                Flags: flags,
+                VKey: 0x41,
+                ..Default::default()
+            }
+        }
+
+        #[test]
+        fn raw_keyboard_repeat_uses_break_events_not_async_key_state() {
+            let mut down = HashSet::new();
+            assert!(super::normalize_raw_key(&mut down, 1, key(0x1e, 0)));
+            for _ in 0..1000 {
+                assert!(!super::normalize_raw_key(&mut down, 1, key(0x1e, 0)));
+            }
+            assert!(!super::normalize_raw_key(
+                &mut down,
+                1,
+                key(0x1e, super::RI_KEY_BREAK)
+            ));
+            assert!(super::normalize_raw_key(&mut down, 1, key(0x1e, 0)));
+            assert!(!super::normalize_raw_key(&mut down, 1, key(0xff, 0)));
+            let pause = super::RAWKEYBOARD {
+                VKey: 0x13,
+                ..key(0x45, super::RI_KEY_E1)
+            };
+            assert!(super::normalize_raw_key(&mut down, 1, pause));
+            assert!(
+                super::normalize_raw_key(&mut down, 1, pause),
+                "Pause does not stick without a break event"
+            );
+        }
+
+        #[test]
+        fn raw_keyboard_devices_and_extended_modifiers_do_not_share_pressed_state() {
+            let mut down = HashSet::new();
+            for (device, flags) in [(1, 0), (1, super::RI_KEY_E0), (1, super::RI_KEY_E1), (2, 0)] {
+                assert!(super::normalize_raw_key(
+                    &mut down,
+                    device,
+                    key(0x1d, flags)
+                ));
+            }
+            assert!(!super::normalize_raw_key(
+                &mut down,
+                1,
+                key(0x1d, super::RI_KEY_BREAK)
+            ));
+            assert!(!super::normalize_raw_key(&mut down, 2, key(0x1d, 0)));
+            assert!(!super::normalize_raw_key(
+                &mut down,
+                1,
+                key(0x1d, super::RI_KEY_E0)
+            ));
+            // Device removal clears that device, not another keyboard's key.
+            down.retain(|(device, _)| *device != 1);
+            assert!(super::normalize_raw_key(
+                &mut down,
+                1,
+                key(0x1d, super::RI_KEY_E0)
+            ));
+            assert!(!super::normalize_raw_key(&mut down, 2, key(0x1d, 0)));
+        }
+
+        #[test]
+        fn captured_and_hidden_cursor_fullscreen_mouse_keep_the_game_target() {
+            use super::{MouseTargetReason, mouse_target};
+            use windows::Win32::Foundation::{HWND, POINT, RECT};
+            let handles = [0u8; 3];
+            let game = HWND(std::ptr::from_ref(&handles[0]).cast_mut().cast());
+            let pointed = HWND(std::ptr::from_ref(&handles[1]).cast_mut().cast());
+            let capture = HWND(std::ptr::from_ref(&handles[2]).cast_mut().cast());
+            let bounds = RECT {
+                left: 0,
+                top: 0,
+                right: 1920,
+                bottom: 1080,
+            };
+            let center = Some((pointed, POINT { x: 960, y: 540 }));
+            assert_eq!(
+                mouse_target(game, capture, Some(bounds), center),
+                (capture, MouseTargetReason::Capture)
+            );
+            assert_eq!(
+                mouse_target(game, HWND::default(), Some(bounds), center),
+                (game, MouseTargetReason::Fullscreen)
+            );
+            assert_eq!(
+                mouse_target(game, HWND::default(), Some(bounds), None),
+                (game, MouseTargetReason::Fullscreen)
+            );
+            assert_eq!(
+                mouse_target(game, HWND::default(), None, center),
+                (pointed, MouseTargetReason::Point)
+            );
+            let second_monitor = Some((pointed, POINT { x: 2100, y: 100 }));
+            assert_eq!(
+                mouse_target(game, HWND::default(), Some(bounds), second_monitor),
+                (pointed, MouseTargetReason::Point)
+            );
+            assert_eq!(
+                mouse_target(game, HWND::default(), None, None),
+                (HWND::default(), MouseTargetReason::Unknown)
+            );
+        }
+
+        #[test]
+        fn fullscreen_bounds_use_the_whole_monitor_including_negative_coordinates() {
+            use windows::Win32::Foundation::RECT;
+            let monitor = RECT {
+                left: -1920,
+                top: 0,
+                right: 0,
+                bottom: 1080,
+            };
+            assert!(super::covers_monitor(monitor, monitor));
+            assert!(!super::covers_monitor(
+                RECT {
+                    bottom: 1040,
+                    ..monitor
+                },
+                monitor
+            ));
+            assert!(!super::covers_monitor(monitor, RECT::default()));
+        }
+
+        #[test]
+        fn diagnostic_payload_contains_only_global_counters_and_backend_state() {
+            let snapshot = super::InputDiagnostics {
+                version: env!("CARGO_PKG_VERSION"),
+                raw_keyboard_primary: true,
+                raw_keyboard_packets: 500,
+                ..Default::default()
+            };
+            let text = toml::to_string_pretty(&snapshot).unwrap();
+            let decoded: toml::Value = toml::from_str(&text).unwrap();
+            assert_eq!(decoded["raw_keyboard_packets"].as_integer(), Some(500));
+            assert_eq!(decoded["raw_keyboard_primary"].as_bool(), Some(true));
+            for forbidden in [
+                "timestamp",
+                "window_title",
+                "app_path",
+                "key_code",
+                "mouse_x",
+                "mouse_y",
+                "event_sequence",
+            ] {
+                assert!(!decoded.as_table().unwrap().contains_key(forbidden));
+            }
+            assert!(text.len() < 2048);
+        }
+
+        #[test]
+        fn native_raw_registration_requires_the_collector_hwnd_and_input_sink() {
+            use super::*;
+            use windows::Win32::UI::Input::RIDEV_REMOVE;
+            use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
+            struct Cleanup(HWND);
+            impl Drop for Cleanup {
+                fn drop(&mut self) {
+                    unsafe {
+                        let devices = [0x02, 0x06].map(|usage| RAWINPUTDEVICE {
+                            usUsagePage: 0x01,
+                            usUsage: usage,
+                            dwFlags: RIDEV_REMOVE,
+                            hwndTarget: HWND::default(),
+                        });
+                        let _ = RegisterRawInputDevices(
+                            &devices,
+                            std::mem::size_of::<RAWINPUTDEVICE>() as u32,
+                        );
+                        let _ = DestroyWindow(self.0);
+                    }
+                }
+            }
+            // Hidden test-owned HWND; no foreground change, input injection,
+            // event capture or access to the running application's database.
+            let window = unsafe {
+                CreateWindowExW(
+                    WS_EX_TOOLWINDOW,
+                    w!("STATIC"),
+                    w!("kb_count_test_raw_registration"),
+                    WS_POPUP,
+                    0,
+                    0,
+                    0,
+                    0,
+                    None,
+                    None,
+                    GetModuleHandleW(None).unwrap(),
+                    None,
+                )
+            }
+            .unwrap();
+            let _cleanup = Cleanup(window);
+            let devices = [0x02, 0x06].map(|usage| RAWINPUTDEVICE {
+                usUsagePage: 0x01,
+                usUsage: usage,
+                dwFlags: RIDEV_INPUTSINK | RIDEV_DEVNOTIFY,
+                hwndTarget: window,
+            });
+            unsafe {
+                RegisterRawInputDevices(&devices, std::mem::size_of::<RAWINPUTDEVICE>() as u32)
+            }
+            .unwrap();
+            assert_eq!(registration_target_matches(window, 0x02), Some(true));
+            assert_eq!(registration_target_matches(window, 0x06), Some(true));
+            assert!(matches!(process_elevation(), "standard" | "elevated"));
+            let foreground_only = RAWINPUTDEVICE {
+                dwFlags: RIDEV_DEVNOTIFY,
+                ..devices[1]
+            };
+            unsafe {
+                RegisterRawInputDevices(
+                    &[foreground_only],
+                    std::mem::size_of::<RAWINPUTDEVICE>() as u32,
+                )
+            }
+            .unwrap();
+            assert_eq!(
+                registration_target_matches(window, 0x06),
+                Some(false),
+                "a valid HWND without INPUTSINK cannot collect a background game"
+            );
+        }
 
         #[test]
         fn raw_input_payload_length_rejects_truncated_packets() {
@@ -772,7 +1330,11 @@ mod raw_input {
 #[cfg(not(windows))]
 mod raw_input {
     use super::*;
-    pub fn run(_tx: SyncSender<InputEvent>, _enabled: Arc<AtomicBool>) {
+    pub fn run(
+        _tx: SyncSender<InputEvent>,
+        _enabled: Arc<AtomicBool>,
+        _diagnostics: Option<std::path::PathBuf>,
+    ) {
         thread::park();
     }
 }

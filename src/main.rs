@@ -833,7 +833,10 @@ fn run() -> anyhow::Result<()> {
     });
     let enabled = Arc::new(AtomicBool::new(cfg.capture_enabled));
     tray::start(Arc::clone(&enabled));
-    let events = collector::start(Arc::clone(&enabled));
+    let diagnostics = std::env::args_os()
+        .any(|arg| arg == "--capture-diagnostics")
+        .then(|| dir.join("logs").join("input-diagnostics.toml"));
+    let events = collector::start(Arc::clone(&enabled), diagnostics);
     let db_writer = Arc::clone(&db);
     let data_generation = Arc::new(AtomicU64::new(0));
     let writer_generation = Arc::clone(&data_generation);
