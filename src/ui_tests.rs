@@ -92,6 +92,193 @@ fn refresh_preserves_ui_filters_and_privacy_state() {
         .unwrap();
 }
 
+fn verify_close_preferences(ui: &MainWindow, window: &MinimalSoftwareWindow) {
+    use config::{CloseAction, Config};
+    use std::cell::{Cell, RefCell};
+    let saved = Rc::new(RefCell::new(Config::default()));
+    let fail = Rc::new(Cell::new(false));
+    let writes = Rc::new(Cell::new(0));
+    let persist = Rc::new({
+        let (saved, fail, writes) = (saved.clone(), fail.clone(), writes.clone());
+        move |action, remember| -> anyhow::Result<()> {
+            anyhow::ensure!(!fail.get(), "测试目录不可写");
+            saved.borrow_mut().close_action = action;
+            saved.borrow_mut().remember_close_action = remember;
+            writes.set(writes.get() + 1);
+            Ok(())
+        }
+    });
+    bind_panel_close(ui, &Config::default(), {
+        let persist = persist.clone();
+        move |a, r| persist(a, r)
+    });
+    let exits = Rc::new(Cell::new(0));
+    ui.on_exit_requested({
+        let exits = exits.clone();
+        move || exits.set(exits.get() + 1)
+    });
+    window.set_size(slint::PhysicalSize::new(820, 440));
+    ui.show().unwrap();
+    let request = || {
+        ui.window()
+            .dispatch_event(slint::platform::WindowEvent::CloseRequested);
+        slint::platform::update_timers_and_animations();
+    };
+    let checkbox = || {
+        let position = slint::LogicalPosition::new(
+            (820.0 - 456.0) / 2.0 + 29.0,
+            (440.0 - 240.0) / 2.0 + 118.0,
+        );
+        let button = slint::platform::PointerEventButton::Left;
+        ui.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerPressed { position, button });
+        ui.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerReleased { position, button });
+        slint::platform::update_timers_and_animations();
+    };
+    request();
+    assert!(ui.get_close_open());
+    assert!(!ui.get_close_dialog_remember());
+    checkbox();
+    assert!(
+        ui.get_close_dialog_remember(),
+        "real remember checkbox is reachable"
+    );
+    save_preview(window, "close-remember-minimum");
+    ui.invoke_close_cancel_clicked();
+    assert_eq!(writes.get(), 0, "cancel never saves the tentative choice");
+    request();
+    assert!(
+        !ui.get_close_dialog_remember(),
+        "cancel discards the checkbox edit"
+    );
+    checkbox();
+    ui.set_capture_active(false);
+    ui.invoke_close_hide_clicked();
+    assert!(!ui.window().is_visible());
+    assert!(!ui.get_capture_active());
+    assert_eq!(writes.get(), 1);
+    assert!(saved.borrow().remember_close_action);
+    assert_eq!(saved.borrow().close_action, CloseAction::Background);
+    // Rebind from serialized configuration to cover the next launch's behavior.
+    let reloaded: Config = toml::from_str(&toml::to_string(&*saved.borrow()).unwrap()).unwrap();
+    bind_panel_close(ui, &reloaded, {
+        let persist = persist.clone();
+        move |a, r| persist(a, r)
+    });
+    ui.show().unwrap();
+    request();
+    assert!(
+        !ui.window().is_visible(),
+        "remembered background choice skips confirmation after restart"
+    );
+    assert!(!ui.get_close_open());
+    assert_eq!(writes.get(), 1, "ordinary closes do not rewrite settings");
+    ui.show().unwrap();
+    ui.invoke_close_preferences_changed(false, 1);
+    request();
+    assert!(
+        ui.get_close_open(),
+        "turning off remember restores confirmation"
+    );
+    assert!(!ui.get_close_dialog_remember());
+    ui.invoke_close_exit_clicked();
+    assert_eq!(exits.get(), 1);
+    assert!(
+        !saved.borrow().remember_close_action,
+        "one-time exit still asks next time"
+    );
+    ui.invoke_close_cancel_clicked();
+    request();
+    checkbox();
+    ui.invoke_close_exit_clicked();
+    assert_eq!(exits.get(), 2);
+    assert_eq!(saved.borrow().close_action, CloseAction::Exit);
+    assert!(saved.borrow().remember_close_action);
+    ui.invoke_close_cancel_clicked();
+    request();
+    assert_eq!(
+        exits.get(),
+        3,
+        "remembered exit uses the existing final-save callback"
+    );
+    ui.invoke_close_preferences_changed(true, 0);
+    fail.set(true);
+    ui.invoke_close_preferences_changed(false, 1);
+    assert!(
+        ui.get_close_remember(),
+        "failed settings write restores the previous checkbox"
+    );
+    assert_eq!(ui.get_close_default_action(), 0);
+    assert!(ui.get_close_preferences_status().contains("无法保存"));
+    request();
+    assert!(
+        !ui.window().is_visible(),
+        "failed settings write cannot change effective behavior"
+    );
+    ui.show().unwrap();
+    fail.set(false);
+    ui.invoke_close_preferences_changed(false, 0);
+    request();
+    checkbox();
+    fail.set(true);
+    ui.invoke_close_exit_clicked();
+    assert_eq!(
+        exits.get(),
+        3,
+        "failed remembered-choice save leaves the panel open for retry"
+    );
+    assert!(ui.get_close_open());
+    assert!(ui.window().is_visible());
+    assert!(!ui.get_close_remember());
+    assert!(ui.get_close_error().contains("无法保存"));
+    ui.set_close_busy(true);
+    ui.invoke_close_cancel_clicked();
+    checkbox();
+    ui.invoke_close_hide_clicked();
+    ui.invoke_close_exit_clicked();
+    request();
+    assert!(ui.get_close_open());
+    assert_eq!(exits.get(), 3, "busy exit cannot be duplicated or canceled");
+    assert!(
+        ui.get_close_dialog_remember(),
+        "busy save disables the remember control"
+    );
+    ui.set_close_busy(false);
+    fail.set(false);
+    ui.invoke_close_exit_clicked();
+    assert_eq!(
+        exits.get(),
+        4,
+        "retry saves preferences before requesting exit"
+    );
+    ui.invoke_close_cancel_clicked();
+    ui.invoke_close_preferences_changed(false, 0);
+    request();
+    let before = writes.get();
+    ui.invoke_close_exit_clicked();
+    assert_eq!(
+        writes.get(),
+        before,
+        "a one-time unremembered exit does not rewrite preferences"
+    );
+    assert_eq!(
+        saved.borrow().close_action,
+        CloseAction::Background,
+        "one-time exit preserves the configured default"
+    );
+    assert!(!saved.borrow().remember_close_action);
+    ui.invoke_close_cancel_clicked();
+    ui.set_selected_page(3);
+    ui.set_page_scroll_y(0.0);
+    ui.set_dark_mode(true);
+    save_preview(window, "close-settings-dark-minimum");
+    ui.set_dark_mode(false);
+    save_preview(window, "close-settings-light-minimum");
+    ui.set_selected_page(0);
+    ui.set_capture_active(true);
+}
+
 fn verify_ui_state() {
     let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
     let (event_sender, event_receiver) = mpsc::sync_channel::<UiEvent>(64);
@@ -104,7 +291,7 @@ fn verify_ui_state() {
     .expect("preview backend");
     let ui = MainWindow::new().expect("UI");
     bind_app_search(&ui);
-    bind_panel_close(&ui);
+    verify_close_preferences(&ui, &window);
     date_picker::bind(&ui);
     if std::env::var_os("KB_COUNT_ACTIVITY_ONLY").is_some() {
         verify_activity_and_close(&ui, &window);

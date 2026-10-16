@@ -410,28 +410,119 @@ fn reset_clear_confirmation(ui: &MainWindow, pending: &AtomicBool) {
     ui.set_clear_status("".into());
 }
 
-fn bind_panel_close(ui: &MainWindow) {
+fn hide_panel(ui: &MainWindow) {
+    ui.set_close_open(false);
+    charts::release_images(ui);
+    let _ = ui.hide();
+}
+
+fn bind_panel_close(
+    ui: &MainWindow,
+    initial: &config::Config,
+    save: impl Fn(config::CloseAction, bool) -> anyhow::Result<()> + 'static,
+) {
+    use config::CloseAction;
+    use std::{cell::Cell, rc::Rc};
+    let preferences = Rc::new(Cell::new((
+        initial.close_action,
+        initial.remember_close_action,
+    )));
+    ui.set_close_default_action(initial.close_action.index());
+    ui.set_close_remember(initial.remember_close_action);
+    let persist = Rc::new({
+        let preferences = preferences.clone();
+        move |ui: &MainWindow, action: CloseAction, remember: bool| {
+            let previous = preferences.get();
+            let result = if previous == (action, remember) {
+                Ok(())
+            } else {
+                save(action, remember)
+            };
+            if let Err(error) = result {
+                ui.set_close_default_action(previous.0.index());
+                ui.set_close_remember(previous.1);
+                let message = format!("无法保存关闭偏好：{error}。请检查程序目录的写入权限。");
+                ui.set_close_preferences_status(message.clone().into());
+                ui.set_close_error("无法保存关闭偏好，请检查程序目录权限或磁盘状态后重试。".into());
+                return false;
+            }
+            preferences.set((action, remember));
+            ui.set_close_default_action(action.index());
+            ui.set_close_remember(remember);
+            ui.set_close_preferences_status("".into());
+            ui.set_close_error("".into());
+            true
+        }
+    });
+    ui.on_close_preferences_changed({
+        let weak = ui.as_weak();
+        let persist = persist.clone();
+        move |remember, index| {
+            if let Some(ui) = weak.upgrade()
+                && let Some(action) = CloseAction::from_index(index)
+            {
+                persist(&ui, action, remember);
+            }
+        }
+    });
     let weak = ui.as_weak();
     ui.window().on_close_requested(move || {
         if let Some(ui) = weak.upgrade() {
+            if ui.get_close_busy() || ui.get_close_open() {
+                return CloseRequestResponse::KeepWindowShown;
+            }
             ui.set_calendar_open(false);
             ui.set_app_picker_open(false);
             ui.invoke_clear_cancel_clicked();
-            if !ui.get_close_open() {
-                ui.set_close_error("".into());
+            ui.set_close_error("".into());
+            let (action, remember) = preferences.get();
+            ui.set_close_dialog_remember(remember);
+            if remember {
+                match action {
+                    CloseAction::Background => hide_panel(&ui),
+                    CloseAction::Exit => ui.invoke_exit_requested(),
+                }
+            } else {
+                ui.set_close_open(true);
             }
-            ui.set_close_open(true);
         }
         CloseRequestResponse::KeepWindowShown
     });
-    let weak = ui.as_weak();
-    ui.on_close_hide_clicked(move || {
-        if let Some(ui) = weak.upgrade()
-            && !ui.get_close_busy()
-        {
-            ui.set_close_open(false);
-            charts::release_images(&ui);
-            let _ = ui.hide();
+    ui.on_close_hide_clicked({
+        let weak = ui.as_weak();
+        let persist = persist.clone();
+        move || {
+            if let Some(ui) = weak.upgrade()
+                && !ui.get_close_busy()
+            {
+                let remember = ui.get_close_dialog_remember();
+                let action = if remember {
+                    CloseAction::Background
+                } else {
+                    CloseAction::from_index(ui.get_close_default_action()).unwrap_or_default()
+                };
+                if persist(&ui, action, remember) {
+                    hide_panel(&ui);
+                }
+            }
+        }
+    });
+    ui.on_close_exit_clicked({
+        let weak = ui.as_weak();
+        move || {
+            if let Some(ui) = weak.upgrade()
+                && !ui.get_close_busy()
+            {
+                let remember = ui.get_close_dialog_remember();
+                let action = if remember {
+                    CloseAction::Exit
+                } else {
+                    CloseAction::from_index(ui.get_close_default_action()).unwrap_or_default()
+                };
+                if persist(&ui, action, remember) {
+                    ui.invoke_exit_requested();
+                }
+            }
         }
     });
     let weak = ui.as_weak();
@@ -716,10 +807,30 @@ fn run() -> anyhow::Result<()> {
     // constructing its window. The collector must register its own HWND last.
     let ui = MainWindow::new()?;
     bind_app_search(&ui);
-    bind_panel_close(&ui);
+    bind_panel_close(&ui, &cfg, {
+        let state = config_state.clone();
+        move |action, remember| {
+            let mut config = state.lock().map_err(|_| anyhow::anyhow!("配置暂不可用"))?;
+            let mut next = config.clone();
+            next.close_action = action;
+            next.remember_close_action = remember;
+            config::save(&next)?;
+            *config = next;
+            Ok(())
+        }
+    });
     date_picker::bind(&ui);
     charts::bind(&ui, Arc::clone(&db));
-    ui.on_exit_requested(tray::request_exit);
+    ui.on_exit_requested({
+        let weak = ui.as_weak();
+        move || {
+            if let Some(ui) = weak.upgrade() {
+                ui.set_close_open(true);
+                ui.set_close_busy(true);
+            }
+            tray::request_exit();
+        }
+    });
     let enabled = Arc::new(AtomicBool::new(cfg.capture_enabled));
     tray::start(Arc::clone(&enabled));
     let events = collector::start(Arc::clone(&enabled));
@@ -1280,6 +1391,9 @@ fn run() -> anyhow::Result<()> {
             }
             tray::Command::Exit => {
                 let Some(ui) = tray_ui.upgrade() else { return };
+                if !ui.get_close_open() {
+                    ui.set_close_dialog_remember(ui.get_close_remember());
+                }
                 ui.set_close_open(true);
                 ui.set_close_busy(true);
                 let saved = exit_handshake(

@@ -1,4 +1,4 @@
-import { LineEdit, ScrollView, ListView, Palette } from "std-widgets.slint";
+import { LineEdit, ScrollView, ListView, Palette, CheckBox, ComboBox } from "std-widgets.slint";
 import { AppRow, InputRow, HeatCell, ActionButton, NavItem, MetricCard, AppListRow, InputList, HeatKey, AppIcon } from "components.slint";
 import { DatePicker, CalendarDay } from "date_picker.slint";
 export { CalendarDay }
@@ -20,7 +20,14 @@ export component MainWindow inherits Window {
     callback chart_pie_mode_selected(int);
     in-out property <bool> close_busy;
     in-out property <string> close_error;
+    in-out property <bool> close_remember;
+    in-out property <int> close_default_action;
+    in-out property <bool> close_dialog_remember;
+    in property <string> close_preferences_status;
+    property <string> close_summary: !close_remember ? "每次询问" : close_default_action == 0 ? "仅关闭窗口，继续后台运行" : "退出应用";
+    callback close_preferences_changed(bool, int);
     callback close_hide_clicked();
+    callback close_exit_clicked();
     callback close_cancel_clicked();
     callback exit_requested();
     in property <[ActivityCell]> activity_cells;
@@ -453,6 +460,16 @@ export component MainWindow inherits Window {
                                     ActionButton { text: root.theme_text; clicked => { root.theme_clicked(); } }
                                     ActionButton { text: root.startup_text; clicked => { root.startup_clicked(); } }
                                 }
+                                HorizontalLayout { spacing: 12px;
+                                    Text { text: "关闭窗口时"; color: root.muted; vertical-alignment: center; }
+                                    ComboBox { model: ["仅关闭窗口，继续后台运行", "退出应用，保存并停止统计"]; current-index <=> root.close_default_action;
+                                        selected(value) => { root.close_preferences_changed(root.close_remember, self.current-index); }
+                                    }
+                                }
+                                CheckBox { text: "关闭窗口时直接执行默认行为，不再询问"; checked <=> root.close_remember;
+                                    toggled => { root.close_preferences_changed(self.checked, root.close_default_action); }
+                                }
+                                Text { min-height: 32px; text: root.close_preferences_status != "" ? root.close_preferences_status : "当前：" + root.close_summary + "。可取消记住，恢复每次询问。"; color: root.muted; font-size: 12px; wrap: word-wrap; }
                             }
                         }
                         Rectangle { border-radius: 10px; border-width: 1px; border-color: root.line; background: root.surface;
@@ -505,7 +522,7 @@ export component MainWindow inherits Window {
             HorizontalLayout { height: root.selected_page == 0 ? 20px : 32px; spacing: 8px;
                 Text { text: root.status_text; color: root.muted; font-size: 11px; overflow: elide; }
                 Rectangle { horizontal-stretch: 1; }
-                Text { text: "关闭时可选择后台运行或退出"; color: root.muted; font-size: 11px; }
+                Text { text: "关闭：" + root.close_summary; color: root.muted; font-size: 11px; }
                 if root.selected_page != 0 && root.page_scroll_y < -64px: ActionButton { text: "回到顶部"; clicked => { root.page_scroll_y = 0px; } }
             }
         }
@@ -543,9 +560,10 @@ export component MainWindow inherits Window {
         CloseDialog {
             x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
             dark: root.dark_mode; active: root.close_open; busy: root.close_busy; error: root.close_error;
+            remember <=> root.close_dialog_remember;
             hide-panel => { root.close_hide_clicked(); }
             canceled => { root.close_cancel_clicked(); }
-            exit-app => { root.exit_requested(); }
+            exit-app => { root.close_exit_clicked(); }
         }
     }
 }

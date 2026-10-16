@@ -1,10 +1,12 @@
 import { ActionButton } from "components.slint";
+import { CheckBox } from "std-widgets.slint";
 
 export component CloseDialog inherits Rectangle {
     in property <bool> dark;
     in property <bool> active;
     in property <bool> busy;
     in property <string> error;
+    in-out property <bool> remember;
     callback hide-panel();
     callback exit-app();
     callback canceled();
@@ -15,16 +17,15 @@ export component CloseDialog inherits Rectangle {
     TouchArea { scroll-event => { return accept; } }
     FocusScope { width: 100%; height: 100%;
         key-pressed(event) => { if event.text == Key.Escape && !root.busy { root.canceled(); return accept; } return reject; }
-        VerticalLayout { padding: 20px; spacing: 12px;
-            Text { text: "关闭 kb_count"; color: root.dark ? #e8effb : #27364f; font-size: 20px; font-weight: 600; }
-            Text { text: "仅关闭窗口会保留当前统计状态，并继续驻留系统托盘。退出应用会停止统计并保存待写入的数据。"; color: root.dark ? #aab9d0 : #5f708a; font-size: 13px; wrap: word-wrap; }
-            Text { min-height: 40px; text: root.busy ? "正在保存统计，请稍候…" : root.error; color: root.dark ? #f0b7ae : #a53931; font-size: 12px; wrap: word-wrap; }
-            HorizontalLayout { spacing: 8px;
+            Text { x: 20px; y: 20px; width: parent.width - 40px; height: 28px; text: "关闭 kb_count"; color: root.dark ? #e8effb : #27364f; font-size: 20px; font-weight: 600; }
+            Text { x: 20px; y: 56px; width: parent.width - 40px; height: 44px; text: "仅关闭窗口会保留当前统计状态，并继续驻留系统托盘。退出应用会停止统计并保存待写入的数据。"; color: root.dark ? #aab9d0 : #5f708a; font-size: 13px; wrap: word-wrap; }
+            CheckBox { x: 20px; y: 106px; width: parent.width - 40px; height: 24px; text: "记住此选择，下次关闭窗口时直接执行"; checked <=> root.remember; enabled: !root.busy; }
+            Text { x: 20px; y: 138px; width: parent.width - 40px; height: 36px; text: root.busy ? "正在保存统计，请稍候…" : root.error != "" ? root.error : root.remember ? "点击下方操作后将其设为默认，可在设置中修改或取消记住。" : "未记住时每次询问。可在设置中更改默认行为。"; color: root.busy || root.error != "" ? (root.dark ? #f0b7ae : #a53931) : (root.dark ? #aab9d0 : #5f708a); font-size: 12px; wrap: word-wrap; }
+            HorizontalLayout { x: 20px; y: 188px; width: parent.width - 40px; height: 32px; spacing: 8px;
                 cancel := ActionButton { text: "取消"; enabled: !root.busy; clicked => { root.canceled(); } }
                 Rectangle { horizontal-stretch: 1; }
                 ActionButton { text: "仅关闭窗口"; enabled: !root.busy; clicked => { root.hide-panel(); } }
                 ActionButton { text: "退出应用"; enabled: !root.busy; clicked => { root.exit-app(); } }
             }
-        }
     }
 }

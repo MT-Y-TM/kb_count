@@ -29,7 +29,7 @@
 
 ## 关闭与退出
 
-主线程使用 `run_event_loop_until_quit`，不会因最后一个窗口隐藏而结束事件循环。点击窗口关闭按钮先显示三种选择，默认键盘焦点在取消：取消保留窗口；仅关闭窗口隐藏面板并保留暂停/运行状态；退出应用与托盘退出使用相同的保存流程。日历、应用选择器及待确认的数据清理会在关闭询问出现时取消。
+主线程使用 `run_event_loop_until_quit`，不会因最后一个窗口隐藏而结束事件循环。默认点击窗口关闭按钮显示三种选择，默认键盘焦点在取消：取消保留窗口；仅关闭窗口隐藏面板并保留暂停/运行状态；退出应用与托盘退出使用相同的保存流程。新增“记住此选择”及设置中的默认行为后，可直接执行所选行为；详见 [关闭偏好说明](close-preferences.md)。日历、应用选择器及待确认的数据清理会在关闭时取消。
 
 退出先关闭采集开关，用 [SendMessageTimeoutW](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendmessagetimeoutw) 向采集窗口发送同步空消息，等待当前采集回调结束，再请求统计线程最终 Flush。失败、超时或命令队列繁忙均恢复原采集状态、保留进程并提供重试提示；统计线程继续持有未写入批次。成功后隐藏面板、退出 Slint 事件循环、结束统计线程、执行 WAL checkpoint 并移除托盘图标。已提交的 WAL 数据不会因 checkpoint 暂未完成而被丢弃。
 
@@ -51,7 +51,7 @@ Remove-Item Env:KB_COUNT_ACTIVITY_ONLY
 
 离线回归不代替真实 Windows 多屏 DPI 切换、系统文本缩放、物理输入与资源占用测量。退出按钮的界面测试只记录回调，不终止测试宿主；退出握手另外测试实际 SQLite 提交、失败恢复、队列占满和等待超时。
 
-## 本次验证结果（2026-10-16）
+## 周期导航阶段验证结果（2026-10-16）
 
 使用 Rust 1.90.0 / Windows MSVC，`cargo fmt --all -- --check`、`cargo check --locked --offline`、`cargo clippy --all-targets --locked --offline -- -D warnings` 全部通过。
 

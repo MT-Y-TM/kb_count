@@ -1,6 +1,28 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CloseAction {
+    #[default]
+    Background,
+    Exit,
+}
+impl CloseAction {
+    pub fn index(self) -> i32 {
+        match self {
+            Self::Background => 0,
+            Self::Exit => 1,
+        }
+    }
+    pub fn from_index(index: i32) -> Option<Self> {
+        match index {
+            0 => Some(Self::Background),
+            1 => Some(Self::Exit),
+            _ => None,
+        }
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub capture_enabled: bool,
@@ -9,6 +31,10 @@ pub struct Config {
     pub start_with_windows: bool,
     #[serde(default)]
     pub dark_mode: bool,
+    #[serde(default)]
+    pub remember_close_action: bool,
+    #[serde(default)]
+    pub close_action: CloseAction,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -17,6 +43,8 @@ impl Default for Config {
             flush_interval_seconds: 5,
             start_with_windows: false,
             dark_mode: false,
+            remember_close_action: false,
+            close_action: CloseAction::Background,
         }
     }
 }
@@ -58,7 +86,7 @@ pub mod startup;
 
 #[cfg(test)]
 mod tests {
-    use super::Config;
+    use super::{CloseAction, Config};
 
     #[test]
     fn legacy_config_defaults_new_options() {
@@ -69,5 +97,25 @@ mod tests {
         assert_eq!(config.flush_interval_seconds, 5);
         assert!(!config.start_with_windows);
         assert!(!config.dark_mode);
+        assert!(!config.remember_close_action);
+        assert_eq!(config.close_action, CloseAction::Background);
+    }
+    #[test]
+    fn close_preferences_round_trip_with_and_without_remembering() {
+        for remember in [false, true] {
+            for action in [CloseAction::Background, CloseAction::Exit] {
+                let config = Config {
+                    remember_close_action: remember,
+                    close_action: action,
+                    ..Config::default()
+                };
+                let saved = toml::to_string_pretty(&config).unwrap();
+                let loaded: Config = toml::from_str(&saved).unwrap();
+                assert_eq!(loaded.remember_close_action, remember);
+                assert_eq!(loaded.close_action, action);
+                assert_eq!(CloseAction::from_index(action.index()), Some(action));
+            }
+        }
+        assert_eq!(CloseAction::from_index(-1), None);
     }
 }
