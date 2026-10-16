@@ -923,6 +923,42 @@ fn verify_activity_and_close(ui: &MainWindow, window: &MinimalSoftwareWindow) {
                         .commands
                         .contains('L')
                 );
+                let anchor = NaiveDate::from_ymd_opt(2024, 10, 15).unwrap();
+                let next = analytics::Period::from_index(period)
+                    .shift(anchor, 1)
+                    .unwrap();
+                click(
+                    w - padding - 247.0,
+                    content_y + 348.0 + ui.get_page_scroll_y(),
+                );
+                assert_eq!(
+                    ui.get_date_text(),
+                    next.to_string(),
+                    "next period at {label}"
+                );
+                assert_eq!(ui.get_query_date(), ui.get_date_text());
+                assert_eq!(ui.get_trend_period(), period);
+                click(
+                    w - padding - 385.0,
+                    content_y + 348.0 + ui.get_page_scroll_y(),
+                );
+                assert_eq!(
+                    ui.get_date_text(),
+                    "2024-10-15",
+                    "previous period at {label}"
+                );
+                click(
+                    w - padding - 316.0,
+                    content_y + 348.0 + ui.get_page_scroll_y(),
+                );
+                assert_eq!(
+                    ui.get_date_text(),
+                    chrono::Local::now().date_naive().to_string(),
+                    "current period at {label}"
+                );
+                assert_eq!(ui.get_trend_period(), period);
+                ui.set_query_date("2024-10-15".into());
+                ui.invoke_query_clicked();
             }
             ui.invoke_chart_period_selected(2);
             ui.set_page_scroll_y(0.0);
@@ -1003,6 +1039,11 @@ fn verify_activity_and_close(ui: &MainWindow, window: &MinimalSoftwareWindow) {
                 !ui.get_trend_series().row_data(0).unwrap().shown,
                 "visibility survives period changes"
             );
+            ui.invoke_chart_period_shift(-1);
+            assert_eq!(ui.get_date_text(), "2024-10-08");
+            assert!(ui.get_trend_app_path().ends_with("editor.exe"));
+            assert!(!ui.get_trend_series().row_data(0).unwrap().shown);
+            ui.invoke_chart_period_shift(1);
             ui.invoke_chart_series_toggled(0);
             ui.invoke_chart_series_toggled(1);
             ui.invoke_chart_all_apps_selected();
@@ -1046,6 +1087,37 @@ fn verify_activity_and_close(ui: &MainWindow, window: &MinimalSoftwareWindow) {
                 );
                 assert!(ui.get_pie_has_data());
                 assert_eq!(ui.get_pie_source().size().width, 240);
+                click(
+                    w - padding - 385.0,
+                    content_y + 348.0 + ui.get_page_scroll_y(),
+                );
+                let previous = analytics::Period::from_index(period)
+                    .shift(NaiveDate::from_ymd_opt(2024, 10, 15).unwrap(), -1)
+                    .unwrap();
+                assert_eq!(ui.get_date_text(), previous.to_string());
+                assert_eq!(ui.get_chart_view(), 1);
+                let (from, to) = analytics::Period::from_index(period).range(previous);
+                let expected = db
+                    .lock()
+                    .unwrap()
+                    .history_daily(&from.to_string(), &to.to_string(), None)
+                    .unwrap()
+                    .iter()
+                    .map(|(_, c)| c.total())
+                    .sum::<i64>();
+                assert_eq!(
+                    ui.get_pie_rows()
+                        .iter()
+                        .map(|row| row.value.replace(',', "").parse::<i64>().unwrap())
+                        .sum::<i64>(),
+                    expected,
+                    "pie follows previous period"
+                );
+                click(
+                    w - padding - 247.0,
+                    content_y + 348.0 + ui.get_page_scroll_y(),
+                );
+                assert_eq!(ui.get_date_text(), "2024-10-15");
             }
             ui.invoke_chart_period_selected(2);
             ui.set_page_scroll_y(-10_000.0);

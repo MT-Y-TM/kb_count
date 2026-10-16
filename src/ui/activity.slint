@@ -1,6 +1,7 @@
 import { ScrollView, LineEdit, ListView } from "std-widgets.slint";
 import { ActionButton } from "components.slint";
 import { PiePanel, PieRow } from "pie_chart.slint";
+import { PeriodControls } from "period_controls.slint";
 export { PieRow }
 
 export struct ActivityCell { date: string, value: string, level: int, week: int, weekday: int, future: bool, month_label: string }
@@ -60,6 +61,8 @@ export component ActivityPage inherits Rectangle {
     in property <string> middle;
     in-out property <length> scroll_y;
     callback period-selected(int);
+    callback period-shift(int);
+    callback period-current();
     callback app-requested();
     callback all-apps-selected();
     callback year-shift(int);
@@ -125,6 +128,8 @@ export component ActivityPage inherits Rectangle {
                 rows: root.pie_rows; source: root.pie_source; has_data: root.pie_has_data;
                 total: root.pie_total; range: root.pie_range; scope: root.pie_scope;
                 period-selected(index) => { root.period-selected(index); }
+                period-shift(delta) => { root.period-shift(delta); }
+                period-current => { root.period-current(); }
                 mode-selected(index) => { root.pie-mode-selected(index); }
             }
             if root.view == 0: Rectangle { border-radius: 10px; border-width: 1px; border-color: root.line; background: root.dark ? #1c2636 : white;
@@ -132,7 +137,11 @@ export component ActivityPage inherits Rectangle {
                     HorizontalLayout { height: 32px; spacing: 6px;
                         Text { text: "输入趋势"; color: root.ink; font-size: 16px; font-weight: 600; }
                         Rectangle { horizontal-stretch: 1; }
-                        for label[index] in ["日", "周", "月", "年"]: ActionButton { width: 42px; text: label; primary: root.period == index; clicked => { root.period-selected(index); } }
+                        PeriodControls { period: root.period;
+                            selected(index) => { root.period-selected(index); }
+                            shifted(delta) => { root.period-shift(delta); }
+                            current => { root.period-current(); }
+                        }
                     }
                     Text { text: root.range; color: root.muted; font-size: 12px; }
                     Text { text: root.summary; color: root.ink; font-size: 13px; wrap: word-wrap; }

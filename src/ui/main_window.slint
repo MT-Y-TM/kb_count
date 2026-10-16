@@ -43,6 +43,8 @@ export component MainWindow inherits Window {
     in-out property <string> chart_app_search;
     callback charts_requested();
     callback chart_period_selected(int);
+    callback chart_period_shift(int);
+    callback chart_period_current();
     callback chart_year_shift(int);
     callback chart_day_selected(string);
     callback chart_series_toggled(int);
@@ -299,6 +301,8 @@ export component MainWindow inherits Window {
                     series: root.trend_series; points: root.trend_points; ticks: root.trend_ticks;
                     maximum: root.trend_maximum; middle: root.trend_middle; scroll_y <=> root.page_scroll_y;
                     period-selected(index) => { root.chart_period_selected(index); }
+                    period-shift(delta) => { root.chart_period_shift(delta); }
+                    period-current => { root.chart_period_current(); }
                     app-requested => { root.chart_app_requested(); }
                     all-apps-selected => { root.chart_all_apps_selected(); }
                     year-shift(delta) => { root.chart_year_shift(delta); }

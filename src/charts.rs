@@ -342,6 +342,28 @@ pub fn bind(ui: &MainWindow, db: Arc<Mutex<Database>>) {
             }
         }
     });
+    ui.on_chart_period_shift({
+        let weak = ui.as_weak();
+        move |delta| {
+            if let Some(ui) = weak.upgrade()
+                && let Ok(date) = NaiveDate::parse_from_str(&ui.get_date_text(), "%Y-%m-%d")
+                && let Some(date) =
+                    analytics::Period::from_index(ui.get_trend_period()).shift(date, delta)
+            {
+                ui.set_query_date(date.to_string().into());
+                ui.invoke_query_clicked();
+            }
+        }
+    });
+    ui.on_chart_period_current({
+        let weak = ui.as_weak();
+        move || {
+            if let Some(ui) = weak.upgrade() {
+                ui.set_query_date(Local::now().date_naive().to_string().into());
+                ui.invoke_query_clicked();
+            }
+        }
+    });
     ui.on_chart_year_shift({
         let weak = ui.as_weak();
         move |delta| {

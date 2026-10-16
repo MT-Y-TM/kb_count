@@ -1,0 +1,16 @@
+import { ActionButton } from "components.slint";
+
+export component PeriodControls inherits Rectangle {
+    in property <int> period;
+    callback selected(int);
+    callback shifted(int);
+    callback current();
+    width: 396px; height: 32px;
+    horizontal-stretch: 0;
+    HorizontalLayout { spacing: 6px;
+        ActionButton { width: 66px; text: root.period == 0 ? "上一日" : root.period == 1 ? "上一周" : root.period == 2 ? "上一月" : "上一年"; clicked => { root.shifted(-1); } }
+        ActionButton { width: 60px; text: root.period == 0 ? "今日" : root.period == 1 ? "本周" : root.period == 2 ? "本月" : "本年"; clicked => { root.current(); } }
+        ActionButton { width: 66px; text: root.period == 0 ? "下一日" : root.period == 1 ? "下一周" : root.period == 2 ? "下一月" : "下一年"; clicked => { root.shifted(1); } }
+        for label[index] in ["日", "周", "月", "年"]: ActionButton { width: 42px; text: label; primary: root.period == index; clicked => { root.selected(index); } }
+    }
+}

@@ -1,5 +1,6 @@
 import { ListView } from "std-widgets.slint";
 import { ActionButton } from "components.slint";
+import { PeriodControls } from "period_controls.slint";
 
 export struct PieRow { label: string, detail: string, value: string, percent: string, tint: color, selected: bool }
 
@@ -15,6 +16,8 @@ export component PiePanel inherits Rectangle {
     in property <string> scope;
     in property <[PieRow]> rows;
     callback period-selected(int);
+    callback period-shift(int);
+    callback period-current();
     callback mode-selected(int);
     property <color> ink: dark ? #e8effb : #27364f;
     property <color> muted: dark ? #aab9d0 : #5f708a;
@@ -26,7 +29,11 @@ export component PiePanel inherits Rectangle {
         HorizontalLayout { height: 32px; spacing: 6px;
             Text { text: "输入占比"; color: root.ink; font-size: 16px; font-weight: 600; }
             Rectangle { horizontal-stretch: 1; }
-            for label[index] in ["日", "周", "月", "年"]: ActionButton { width: 42px; text: label; primary: root.period == index; clicked => { root.period-selected(index); } }
+            PeriodControls { period: root.period;
+                selected(index) => { root.period-selected(index); }
+                shifted(delta) => { root.period-shift(delta); }
+                current => { root.period-current(); }
+            }
         }
         HorizontalLayout { height: 32px; spacing: 8px;
             ActionButton { width: 88px; text: "输入构成"; primary: root.mode == 0; clicked => { root.mode-selected(0); } }

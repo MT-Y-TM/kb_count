@@ -20,6 +20,24 @@ impl Period {
             _ => Self::Day,
         }
     }
+    pub fn shift(self, anchor: NaiveDate, delta: i32) -> Option<NaiveDate> {
+        let shifted = match self {
+            Self::Day => anchor.checked_add_signed(Duration::days(i64::from(delta))),
+            Self::Week => anchor.checked_add_signed(Duration::days(i64::from(delta) * 7)),
+            Self::Month | Self::Year => {
+                let months =
+                    delta
+                        .unsigned_abs()
+                        .checked_mul(if self == Self::Year { 12 } else { 1 })?;
+                if delta < 0 {
+                    anchor.checked_sub_months(chrono::Months::new(months))
+                } else {
+                    anchor.checked_add_months(chrono::Months::new(months))
+                }
+            }
+        }?;
+        (1..=9999).contains(&shifted.year()).then_some(shifted)
+    }
     pub fn range(self, anchor: NaiveDate) -> (NaiveDate, NaiveDate) {
         let start = match self {
             Self::Day => anchor,
@@ -335,5 +353,25 @@ mod tests {
         assert_eq!(path(&[None, None], 100), "");
         let text = path(&[Some(10), None, Some(20)], 100);
         assert_eq!(text.matches('M').count(), 2);
+    }
+    #[test]
+    fn navigation_crosses_period_boundaries_and_clamps_month_ends() {
+        let date = |text: &str| NaiveDate::parse_from_str(text, "%Y-%m-%d").unwrap();
+        for (period, start, delta, expected) in [
+            (Period::Day, "2024-02-28", 1, "2024-02-29"),
+            (Period::Day, "2025-01-01", -1, "2024-12-31"),
+            (Period::Week, "2025-12-30", 1, "2026-01-06"),
+            (Period::Week, "2026-01-06", -1, "2025-12-30"),
+            (Period::Month, "2024-01-31", 1, "2024-02-29"),
+            (Period::Month, "2025-03-31", -1, "2025-02-28"),
+            (Period::Month, "2024-12-15", 1, "2025-01-15"),
+            (Period::Year, "2024-02-29", 1, "2025-02-28"),
+            (Period::Year, "2024-02-29", -1, "2023-02-28"),
+        ] {
+            assert_eq!(period.shift(date(start), delta), Some(date(expected)));
+        }
+        assert_eq!(Period::Day.shift(date("0001-01-01"), -1), None);
+        assert_eq!(Period::Year.shift(date("9999-12-31"), 1), None);
+        assert_eq!(Period::Year.shift(date("2024-02-29"), i32::MIN), None);
     }
 }
