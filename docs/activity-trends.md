@@ -56,3 +56,7 @@ Remove-Item Env:KB_COUNT_ACTIVITY_ONLY
 使用 Rust 1.90.0 / Windows MSVC，`cargo fmt --all -- --check`、`cargo check --locked --offline`、`cargo clippy --all-targets --locked --offline -- -D warnings` 全部通过。
 
 完整 `cargo test --locked --offline`：49 项通过、0 失败，62.10 秒。额外活动界面离线绘图回归：1 项通过、0 失败，97.89 秒。覆盖 820×440 逻辑最小窗口、100%/125%/150%/175%/200% 对应客户区及深浅主题，检查日/周/月/年、上一周期／下一周期／本周期的真实组件点击及日期同步、跨年／月底／闰日、全应用/单应用、饼图分母与分组、零输入/旧日记录、图例滚动、关闭三选项及生产主循环的显式退出配置。退出统计线程的同步确认另外覆盖成功接收、接收方超时离开、写入失败三种行为。上述时长为测试运行时间，不代表应用常驻 CPU 或内存指标。
+
+最终 `cargo build --release --locked --offline` 通过，耗时 4 分 19 秒。产物 `target/release/kb_count.exe` 为 16,607,232 字节，构建时间为 2026-10-16 16:35:25（本地）。`tools/verify_release.py` 检查通过：x64、GUI 子系统、十二种尺寸内嵌图标和版本资源；文件版本为 0.1.0。代码提交为 `2595256`，SHA-256 为 `3F5FB6425F101C7E0678CBF08DC747289CF53EE6017B4CD6894D9DC798DD2C4E`。该检查只读取 PE 文件，不启动采集，也不访问个人统计库。
+
+构建时旧 Release 正在运行，因此只将其 EXE 在原目录改名保留为 `kb_count.before-period-navigation-20261016-163105.exe`，没有结束旧进程或移动配置、数据库及 WAL 文件。新功能需退出旧进程后打开新版；旧版若在退出保存后仍留在任务管理器，可手动结束旧进程再启动新版。新版包含退出确认后显式回收统计线程的修复。实际物理设备、原生 Windows 多屏切换、长时后台 CPU／内存占用未在本轮重测。
