@@ -13,6 +13,7 @@ export component MainWindow inherits Window {
     in property <string> settings_text;
     in property <string> startup_text;
     in property <string> clear_button_text;
+    in property <string> clear_status;
     in property <string> theme_text;
     in-out property <string> export_from_date;
     in-out property <string> export_to_date;
@@ -126,6 +127,7 @@ export component MainWindow inherits Window {
     in property <int> heatmap_max: 1;
     in property <int> ranking_sort;
     in-out property <int> selected_page;
+    in-out property <length> page_scroll_y;
     in-out property <int> heatmap_scope;
     callback heatmap_all_clicked();
     callback heatmap_app_clicked();
@@ -144,7 +146,10 @@ export component MainWindow inherits Window {
     property <color> muted: dark_mode ? #aab9d0 : #5f708a;
     changed dark_mode => { Palette.color-scheme = root.dark_mode ? ColorScheme.dark : ColorScheme.light; }
     changed app_search => { root.app_search_changed(); }
-    changed selected_page => { if root.selected_page != 3 { root.clear_cancel_clicked(); } }
+    changed selected_page => {
+        root.page_scroll_y = 0px;
+        if root.selected_page != 3 { root.clear_cancel_clicked(); }
+    }
     init => { Palette.color-scheme = root.dark_mode ? ColorScheme.dark : ColorScheme.light; }
 
     title: "kb_count";
@@ -260,7 +265,7 @@ export component MainWindow inherits Window {
                     }
                 }
                 if root.selected_page == 1: ScrollView {
-                    viewport-width: max(self.visible-width, 700px);
+                    viewport-y <=> root.page_scroll_y;
                     viewport-height: max(self.visible-height, keys-content.preferred-height);
                     keys-content := VerticalLayout { spacing: 16px; padding-right: 6px;
                         Rectangle { border-radius: 10px; border-width: 1px; border-color: root.line; background: root.surface;
@@ -272,12 +277,20 @@ export component MainWindow inherits Window {
                                     ActionButton { text: "当前应用"; enabled: root.detail_loaded; primary: root.heatmap_scope == 1; clicked => { root.heatmap_scope = 1; root.heatmap_app_clicked(); } }
                                 }
                                 Text { text: root.heatmap_scope == 0 ? "全应用 · " + root.date_text : root.detail_name + " · " + root.date_text; color: root.muted; font-size: 12px; overflow: elide; }
-                                HorizontalLayout { spacing: 4px; for key in root.heat_function_keys: HeatKey { label: key.label; count: key.count; dark: root.dark_mode; max-count: root.heatmap_max; } }
-        HorizontalLayout { spacing: 4px; HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "`"; count: heat_backtick; width: 48px; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "1"; count: heat_1; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "2"; count: heat_2; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "3"; count: heat_3; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "4"; count: heat_4; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "5"; count: heat_5; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "6"; count: heat_6; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "7"; count: heat_7; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "8"; count: heat_8; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "9"; count: heat_9; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "0"; count: heat_0; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "-"; count: heat_minus; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "="; count: heat_equal; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "Bksp"; count: heat_backspace; width: 58px; } }
-        HorizontalLayout { spacing: 4px; HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "Tab"; count: heat_tab; width: 48px; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "Q"; count: heat_q; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "W"; count: heat_w; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "E"; count: heat_e; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "R"; count: heat_r; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "T"; count: heat_t; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "Y"; count: heat_y; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "U"; count: heat_u; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "I"; count: heat_i; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "O"; count: heat_o; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "P"; count: heat_p; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "["; count: heat_left_bracket; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "]"; count: heat_right_bracket; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "\\"; count: heat_backslash; width: 58px; } }
-        HorizontalLayout { spacing: 4px; HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "Caps"; count: heat_caps; width: 58px; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "A"; count: heat_a; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "S"; count: heat_s; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "D"; count: heat_d; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "F"; count: heat_f; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "G"; count: heat_g; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "H"; count: heat_h; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "J"; count: heat_j; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "K"; count: heat_k; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "L"; count: heat_l; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: ";"; count: heat_semicolon; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "'"; count: heat_quote; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "Enter"; count: heat_enter; width: 58px; } }
-        HorizontalLayout { spacing: 4px; HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "LShift"; count: heat_left_shift; width: 64px; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "Z"; count: heat_z; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "X"; count: heat_x; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "C"; count: heat_c; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "V"; count: heat_v; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "B"; count: heat_b; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "N"; count: heat_n; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "M"; count: heat_m; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: ","; count: heat_comma; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "."; count: heat_period; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "/"; count: heat_slash; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "RShift"; count: heat_right_shift; width: 64px; } }
-        HorizontalLayout { spacing: 4px; HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "L Ctrl"; count: heat_ctrl; width: 58px; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "L Alt"; count: heat_alt; width: 52px; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "Space"; count: heat_space; width: 190px; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "R Alt"; count: heat_right_alt; width: 52px; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "R Ctrl"; count: heat_right_ctrl; width: 58px; } }
+                                ScrollView {
+                                    height: 368px;
+                                    viewport-width: max(self.visible-width, 630px);
+                                    viewport-height: self.visible-height;
+                                    vertical-scrollbar-policy: always-off;
+                                    VerticalLayout { padding-top: 28px; padding-bottom: 4px; padding-right: 2px; spacing: 8px;
+                                        HorizontalLayout { spacing: 4px; for key in root.heat_function_keys: HeatKey { label: key.label; count: key.count; dark: root.dark_mode; max-count: root.heatmap_max; } }
+                                        HorizontalLayout { spacing: 4px; HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "`"; count: heat_backtick; width: 48px; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "1"; count: heat_1; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "2"; count: heat_2; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "3"; count: heat_3; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "4"; count: heat_4; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "5"; count: heat_5; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "6"; count: heat_6; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "7"; count: heat_7; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "8"; count: heat_8; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "9"; count: heat_9; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "0"; count: heat_0; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "-"; count: heat_minus; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "="; count: heat_equal; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "Bksp"; tooltip-right: true; count: heat_backspace; width: 58px; } }
+                                        HorizontalLayout { spacing: 4px; HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "Tab"; count: heat_tab; width: 48px; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "Q"; count: heat_q; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "W"; count: heat_w; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "E"; count: heat_e; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "R"; count: heat_r; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "T"; count: heat_t; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "Y"; count: heat_y; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "U"; count: heat_u; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "I"; count: heat_i; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "O"; count: heat_o; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "P"; count: heat_p; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "["; count: heat_left_bracket; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "]"; count: heat_right_bracket; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "\\"; tooltip-right: true; count: heat_backslash; width: 58px; } }
+                                        HorizontalLayout { spacing: 4px; HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "Caps"; count: heat_caps; width: 58px; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "A"; count: heat_a; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "S"; count: heat_s; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "D"; count: heat_d; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "F"; count: heat_f; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "G"; count: heat_g; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "H"; count: heat_h; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "J"; count: heat_j; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "K"; count: heat_k; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "L"; count: heat_l; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: ";"; count: heat_semicolon; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "'"; count: heat_quote; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "Enter"; tooltip-right: true; count: heat_enter; width: 58px; } }
+                                        HorizontalLayout { spacing: 4px; HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "LShift"; count: heat_left_shift; width: 64px; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "Z"; count: heat_z; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "X"; count: heat_x; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "C"; count: heat_c; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "V"; count: heat_v; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "B"; count: heat_b; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "N"; count: heat_n; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "M"; count: heat_m; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: ","; count: heat_comma; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "."; count: heat_period; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "/"; count: heat_slash; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "RShift"; tooltip-right: true; count: heat_right_shift; width: 64px; } }
+                                        HorizontalLayout { spacing: 4px; HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "L Ctrl"; count: heat_ctrl; width: 58px; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "L Alt"; count: heat_alt; width: 52px; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "Space"; count: heat_space; width: 190px; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "R Alt"; count: heat_right_alt; width: 52px; } HeatKey { dark: root.dark_mode; max-count: root.heatmap_max; label: "R Ctrl"; count: heat_right_ctrl; width: 58px; } }
+                                    }
+                                }
                                 HorizontalLayout { spacing: 7px;
                                     Text { text: "低"; font-size: 11px; color: root.muted; }
                                     for tint in [#e5edfa, #b9d0f3, #91b4ee, #5d8ede, #3268c5]: Rectangle { width: 17px; height: 7px; border-radius: 2px; background: tint; }
@@ -295,6 +308,7 @@ export component MainWindow inherits Window {
                     }
                 }
                 if root.selected_page == 2: ScrollView {
+                    viewport-y <=> root.page_scroll_y;
                     viewport-height: max(self.visible-height, detail-content.preferred-height);
                     detail-content := VerticalLayout { spacing: 16px; padding-right: 6px;
                         if !root.detail_loaded: Rectangle {
@@ -336,6 +350,7 @@ export component MainWindow inherits Window {
                     }
                 }
                 if root.selected_page == 3: ScrollView {
+                    viewport-y <=> root.page_scroll_y;
                     viewport-height: max(self.visible-height, settings-content.preferred-height);
                     settings-content := VerticalLayout { spacing: 16px; padding-right: 6px;
                         Rectangle { border-radius: 10px; border-width: 1px; border-color: root.line; background: root.surface;
@@ -381,20 +396,24 @@ export component MainWindow inherits Window {
                                 Text { text: "本地存储"; font-size: 16px; font-weight: 600; color: root.ink; }
                                 Text { text: root.data_directory; color: root.muted; font-size: 12px; wrap: word-wrap; }
                                 Text { text: "SQLite · WAL 模式 · 随程序目录一起迁移"; color: root.muted; font-size: 12px; }
-                                HorizontalLayout {
-                                    Text { text: "清空统计会保留应用策略，操作不可撤销。"; color: root.dark_mode ? #caa39e : #b57a73; font-size: 12px; wrap: word-wrap; vertical-alignment: center; }
-                                    if root.clear_confirmation: ActionButton { text: "取消"; clicked => { root.clear_cancel_clicked(); } }
-                                    ActionButton { text: root.clear_button_text; clicked => { root.clear_data_clicked(); } }
+                                Text { min-height: 32px; text: root.clear_status == "" ? "清空统计会保留应用策略，操作不可撤销。" : root.clear_status;
+                                    color: root.clear_confirmation || root.clear_status == "" ? (root.dark_mode ? #caa39e : #91584f) : root.muted;
+                                    font-size: 12px; wrap: word-wrap; vertical-alignment: center; }
+                                HorizontalLayout { spacing: 8px;
+                                    Rectangle { horizontal-stretch: 1; }
+                                    if root.clear_confirmation: ActionButton { width: 72px; text: "取消"; clicked => { root.clear_cancel_clicked(); } }
+                                    ActionButton { width: 148px; text: root.clear_button_text; clicked => { root.clear_data_clicked(); } }
                                 }
                             }
                         }
                     }
                 }
             }
-            HorizontalLayout { height: 20px; spacing: 8px;
+            HorizontalLayout { height: root.selected_page == 0 ? 20px : 32px; spacing: 8px;
                 Text { text: root.status_text; color: root.muted; font-size: 11px; overflow: elide; }
                 Rectangle { horizontal-stretch: 1; }
                 Text { text: "关闭面板后继续在托盘统计"; color: root.muted; font-size: 11px; }
+                if root.selected_page != 0 && root.page_scroll_y < -64px: ActionButton { text: "回到顶部"; clicked => { root.page_scroll_y = 0px; } }
             }
         }
     }

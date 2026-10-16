@@ -366,6 +366,33 @@ fn bind_app_search(ui: &MainWindow) {
     });
 }
 
+fn arm_clear_confirmation(ui: &MainWindow, pending: &AtomicBool) -> bool {
+    if pending.swap(true, Ordering::Relaxed) {
+        return false;
+    }
+    ui.set_clear_confirmation(true);
+    ui.set_clear_button_text("再次点击确认清空".into());
+    ui.set_clear_status("清空操作不可撤销，请再次点击确认。".into());
+    true
+}
+
+fn reset_clear_confirmation(ui: &MainWindow, pending: &AtomicBool) {
+    pending.store(false, Ordering::Relaxed);
+    ui.set_clear_confirmation(false);
+    ui.set_clear_button_text("清空统计数据".into());
+    ui.set_clear_status("".into());
+}
+
+fn bind_panel_close(ui: &MainWindow) {
+    let weak = ui.as_weak();
+    ui.window().on_close_requested(move || {
+        if let Some(ui) = weak.upgrade() {
+            ui.invoke_clear_cancel_clicked();
+        }
+        CloseRequestResponse::HideWindow
+    });
+}
+
 fn refresh_heatmap(
     ui: &MainWindow,
     database: &storage::database::Database,
@@ -631,8 +658,7 @@ fn run() -> anyhow::Result<()> {
     // constructing its window. The collector must register its own HWND last.
     let ui = MainWindow::new()?;
     bind_app_search(&ui);
-    ui.window()
-        .on_close_requested(|| CloseRequestResponse::HideWindow);
+    bind_panel_close(&ui);
     let enabled = Arc::new(AtomicBool::new(cfg.capture_enabled));
     tray::start(Arc::clone(&enabled));
     let events = collector::start(Arc::clone(&enabled));
@@ -1030,10 +1056,7 @@ fn run() -> anyhow::Result<()> {
         let Some(ui) = clear_ui.upgrade() else {
             return;
         };
-        if !clear_pending_for_ui.swap(true, Ordering::Relaxed) {
-            ui.set_clear_confirmation(true);
-            ui.set_clear_button_text("再次点击确认清空".into());
-            ui.set_settings_text("清空操作不可撤销，请再次点击确认。".into());
+        if arm_clear_confirmation(&ui, &clear_pending_for_ui) {
             return;
         }
         let (ack_tx, ack_rx) = mpsc::sync_channel(1);
@@ -1051,9 +1074,7 @@ fn run() -> anyhow::Result<()> {
         } else {
             Err(anyhow::anyhow!("统计线程已停止"))
         };
-        clear_pending_for_ui.store(false, Ordering::Relaxed);
-        ui.set_clear_confirmation(false);
-        ui.set_clear_button_text("清空统计数据".into());
+        reset_clear_confirmation(&ui, &clear_pending_for_ui);
         match result {
             Ok(()) => {
                 ui.set_detail_loaded(false);
@@ -1069,17 +1090,15 @@ fn run() -> anyhow::Result<()> {
                     );
                 }
                 ui.set_detail_text("".into());
-                ui.set_settings_text("统计数据已清空。".into());
+                ui.set_clear_status("统计数据已清空。".into());
             }
-            Err(error) => ui.set_settings_text(format!("清空失败：{error}").into()),
+            Err(error) => ui.set_clear_status(format!("清空失败：{error}").into()),
         }
     });
     let cancel_ui = ui.as_weak();
     ui.on_clear_cancel_clicked(move || {
-        clear_pending.store(false, Ordering::Relaxed);
         if let Some(ui) = cancel_ui.upgrade() {
-            ui.set_clear_confirmation(false);
-            ui.set_clear_button_text("清空统计数据".into());
+            reset_clear_confirmation(&ui, &clear_pending);
         }
     });
     let pause_config = Arc::clone(&config_state);

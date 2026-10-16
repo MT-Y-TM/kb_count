@@ -174,6 +174,7 @@ export component HeatKey inherits Rectangle {
     in property <int> count;
     in property <int> max-count: 1;
     in property <bool> dark;
+    in property <bool> tooltip-right;
     property <float> level: count / max(1, max-count);
     width: 39px; height: 46px; border-radius: 5px; border-width: 1px;
     border-color: dark ? #3a4a63 : #dbe4f2;
@@ -187,6 +188,7 @@ export component HeatKey inherits Rectangle {
     }
     Rectangle {
         visible: hover.has-hover;
+        x: root.tooltip-right ? parent.width - self.width : 0px;
         y: -28px; height: 24px; width: max(parent.width, tooltip-text.preferred-width + 16px);
         border-radius: 4px; background: #24344d;
         tooltip-text := Text { text: root.label + " · " + root.count; color: white; horizontal-alignment: center; vertical-alignment: center; font-size: 12px; }

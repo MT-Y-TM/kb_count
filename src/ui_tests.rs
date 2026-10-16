@@ -89,6 +89,7 @@ fn verify_ui_state() {
         .expect("preview backend");
     let ui = MainWindow::new().expect("UI");
     bind_app_search(&ui);
+    bind_panel_close(&ui);
     window.set_size(slint::PhysicalSize::new(1060, 780));
     let mut db = storage::database::Database::open(std::path::Path::new(":memory:")).unwrap();
     let date = "2026-10-15";
@@ -273,6 +274,36 @@ fn verify_ui_state() {
         let queries = queries.clone();
         move || queries.set(queries.get() + 1)
     });
+    let exports = Rc::new(std::cell::Cell::new(0));
+    ui.on_export_clicked({
+        let exports = exports.clone();
+        move || exports.set(exports.get() + 1)
+    });
+    let app_queries = Rc::new(std::cell::Cell::new(0));
+    ui.on_query_app_clicked({
+        let app_queries = app_queries.clone();
+        move || app_queries.set(app_queries.get() + 1)
+    });
+    let confirmed_clears = Rc::new(std::cell::Cell::new(0));
+    let pending_clear = Arc::new(AtomicBool::new(false));
+    ui.on_clear_data_clicked({
+        let weak = ui.as_weak();
+        let pending = pending_clear.clone();
+        let confirmed = confirmed_clears.clone();
+        move || {
+            let ui = weak.upgrade().unwrap();
+            if !arm_clear_confirmation(&ui, &pending) {
+                confirmed.set(confirmed.get() + 1);
+                reset_clear_confirmation(&ui, &pending);
+            }
+        }
+    });
+    ui.on_clear_cancel_clicked({
+        let weak = ui.as_weak();
+        let pending = pending_clear.clone();
+        move || reset_clear_confirmation(&weak.upgrade().unwrap(), &pending)
+    });
+    ui.set_settings_text("应用策略反馈保持在策略区域".into());
     // Exercise logical sizing at the same physical client size: increased DPI
     // must switch to the compact layout rather than enlarge the window minimum.
     for (label, scale, width, height) in [
@@ -315,6 +346,138 @@ fn verify_ui_state() {
         for page in 0..4 {
             ui.set_selected_page(page);
             save_preview(&window, &format!("scale-{label}-{page}"));
+        }
+        // Cover both spacious and compact layouts, rather than only endpoints.
+        {
+            let padding = if compact { 12.0 } else { 26.0 };
+            let gap = if compact { 10.0 } else { 18.0 };
+            for page in [1, 2, 3] {
+                ui.set_selected_page(page);
+                slint::platform::update_timers_and_animations();
+                assert_eq!(ui.get_page_scroll_y(), 0.0, "new page begins at the top");
+                if page == 1 {
+                    ui.window()
+                        .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                            position: slint::LogicalPosition::new(
+                                content_x + 180.0,
+                                height as f32 / scale / 2.0,
+                            ),
+                            delta_x: -1_000.0,
+                            delta_y: 0.0,
+                        });
+                    slint::platform::update_timers_and_animations();
+                    assert_eq!(
+                        ui.get_page_scroll_y(),
+                        0.0,
+                        "horizontal pan stays inside the keyboard"
+                    );
+                    save_preview(&window, &format!("keyboard-{label}-right"));
+                }
+                ui.window()
+                    .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                        position: slint::LogicalPosition::new(
+                            content_x + if page == 1 { 180.0 } else { 4.0 },
+                            height as f32 / scale / 2.0,
+                        ),
+                        delta_x: 0.0,
+                        delta_y: -10_000.0,
+                    });
+                slint::platform::update_timers_and_animations();
+                assert!(
+                    ui.get_page_scroll_y() < -64.0,
+                    "wheel reaches the page below the keyboard"
+                );
+                save_preview(&window, &format!("scroll-{label}-{page}-bottom"));
+                let logical_height = height as f32 / scale;
+                if page == 2 {
+                    let before = app_queries.get();
+                    click(
+                        logical_width - padding - 154.0,
+                        logical_height - padding - gap - 79.0,
+                    );
+                    assert_eq!(
+                        app_queries.get(),
+                        before + 1,
+                        "app query is reachable at {label}"
+                    );
+                }
+                if page == 3 {
+                    let before = exports.get();
+                    click(
+                        logical_width - padding - 64.0,
+                        logical_height - padding - gap - 313.0,
+                    );
+                    assert_eq!(
+                        exports.get(),
+                        before + 1,
+                        "CSV export is reachable at {label}"
+                    );
+                    let (x, y) = (
+                        logical_width - padding - 100.0,
+                        logical_height - padding - gap - 68.0,
+                    );
+                    let before = confirmed_clears.get();
+                    let scroll = ui.get_page_scroll_y();
+                    click(x, y);
+                    assert!(ui.get_clear_confirmation(), "clear asks for confirmation");
+                    assert_eq!(confirmed_clears.get(), before);
+                    assert!(ui.get_clear_status().contains("不可撤销"));
+                    assert_eq!(ui.get_settings_text(), "应用策略反馈保持在策略区域");
+                    assert_eq!(
+                        ui.get_page_scroll_y(),
+                        scroll,
+                        "confirmation does not move the page"
+                    );
+                    save_preview(&window, &format!("clear-{label}-confirm"));
+                    click(x, y);
+                    assert_eq!(
+                        confirmed_clears.get(),
+                        before + 1,
+                        "confirmation stays under the pointer"
+                    );
+                    assert!(!ui.get_clear_confirmation());
+                    click(x, y);
+                    click(x - 118.0, y);
+                    assert!(!ui.get_clear_confirmation(), "cancel is reachable");
+                    assert_eq!(confirmed_clears.get(), before + 1);
+                    click(x, y);
+                    assert!(ui.get_clear_confirmation());
+                    ui.window()
+                        .dispatch_event(slint::platform::WindowEvent::CloseRequested);
+                    assert!(!ui.window().is_visible(), "closing hides the panel");
+                    assert!(
+                        !ui.get_clear_confirmation(),
+                        "closing cancels a pending clear"
+                    );
+                    assert!(!pending_clear.load(Ordering::Relaxed));
+                    ui.show().unwrap();
+                    slint::platform::update_timers_and_animations();
+                }
+                click(
+                    logical_width - padding - 35.0,
+                    logical_height - padding - 16.0,
+                );
+                assert_eq!(ui.get_page_scroll_y(), 0.0, "back to top at {label}");
+                if page == 2 {
+                    ui.window()
+                        .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                            position: slint::LogicalPosition::new(
+                                content_x + 4.0,
+                                logical_height / 2.0,
+                            ),
+                            delta_x: 0.0,
+                            delta_y: -10_000.0,
+                        });
+                    slint::platform::update_timers_and_animations();
+                    click(
+                        logical_width - padding - 57.0,
+                        logical_height - padding - gap - 79.0,
+                    );
+                    assert_eq!(ui.get_selected_page(), 3, "policy action reaches settings");
+                    assert_eq!(ui.get_policy_path(), ui.get_detail_path());
+                    assert_eq!(ui.get_page_scroll_y(), 0.0);
+                }
+            }
         }
         if label == "minimum" {
             ui.set_selected_page(0);
