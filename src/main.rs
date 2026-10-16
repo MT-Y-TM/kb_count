@@ -1,8 +1,11 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+mod analytics;
 mod app_icons;
+mod charts;
 mod collector;
 mod config;
 mod date_picker;
+mod pie;
 mod stats;
 mod storage;
 mod tray;
@@ -40,6 +43,23 @@ enum RankingSort {
 enum WriterCommand {
     Clear(mpsc::SyncSender<bool>),
     Shutdown(mpsc::SyncSender<bool>),
+}
+
+fn exit_handshake(
+    enabled: &AtomicBool,
+    commands: &mpsc::SyncSender<WriterCommand>,
+    settle: impl FnOnce() -> bool,
+    timeout: Duration,
+) -> bool {
+    let previous = enabled.swap(false, Ordering::AcqRel);
+    let (ack_tx, ack_rx) = mpsc::sync_channel(1);
+    let saved = settle()
+        && commands.try_send(WriterCommand::Shutdown(ack_tx)).is_ok()
+        && ack_rx.recv_timeout(timeout).unwrap_or(false);
+    if !saved {
+        enabled.store(previous, Ordering::Release);
+    }
+    saved
 }
 
 fn heat_count(rows: &[storage::database::KeyTotal], scan_code: &str) -> i32 {
@@ -389,9 +409,32 @@ fn bind_panel_close(ui: &MainWindow) {
     ui.window().on_close_requested(move || {
         if let Some(ui) = weak.upgrade() {
             ui.set_calendar_open(false);
+            ui.set_app_picker_open(false);
             ui.invoke_clear_cancel_clicked();
+            if !ui.get_close_open() {
+                ui.set_close_error("".into());
+            }
+            ui.set_close_open(true);
         }
-        CloseRequestResponse::HideWindow
+        CloseRequestResponse::KeepWindowShown
+    });
+    let weak = ui.as_weak();
+    ui.on_close_hide_clicked(move || {
+        if let Some(ui) = weak.upgrade()
+            && !ui.get_close_busy()
+        {
+            ui.set_close_open(false);
+            charts::release_images(&ui);
+            let _ = ui.hide();
+        }
+    });
+    let weak = ui.as_weak();
+    ui.on_close_cancel_clicked(move || {
+        if let Some(ui) = weak.upgrade()
+            && !ui.get_close_busy()
+        {
+            ui.set_close_open(false);
+        }
     });
 }
 
@@ -519,6 +562,9 @@ fn refresh_overview(
         refresh_detail(ui, database, date, ui.get_detail_path().as_str())?;
     }
     refresh_heatmap(ui, database, date)?;
+    if ui.get_selected_page() == 4 {
+        charts::refresh(ui, database)?;
+    }
     Ok(())
 }
 
@@ -603,6 +649,10 @@ fn main() {
     }
 }
 
+fn run_desktop_event_loop() -> Result<(), slint::platform::PlatformError> {
+    slint::run_event_loop_until_quit()
+}
+
 #[cfg(windows)]
 fn show_startup_error(error: &anyhow::Error) {
     use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
@@ -662,6 +712,8 @@ fn run() -> anyhow::Result<()> {
     bind_app_search(&ui);
     bind_panel_close(&ui);
     date_picker::bind(&ui);
+    charts::bind(&ui, Arc::clone(&db));
+    ui.on_exit_requested(tray::request_exit);
     let enabled = Arc::new(AtomicBool::new(cfg.capture_enabled));
     tray::start(Arc::clone(&enabled));
     let events = collector::start(Arc::clone(&enabled));
@@ -670,7 +722,7 @@ fn run() -> anyhow::Result<()> {
     let writer_generation = Arc::clone(&data_generation);
     let flush_seconds = cfg.flush_interval_seconds.max(1);
     let (writer_command_tx, writer_command_rx) = mpsc::sync_channel(1);
-    thread::Builder::new()
+    let writer_handle = thread::Builder::new()
         .name("kb-stats-writer".into())
         .spawn(move || {
             let mut pending = Vec::<stats::event::InputEvent>::new();
@@ -716,7 +768,8 @@ fn run() -> anyhow::Result<()> {
                     Ok(WriterCommand::Shutdown(ack)) => {
                         flush(&events, &db_writer, &mut pending);
                         let _ = ack.send(pending.is_empty());
-                        break;
+                        // Keep retrying on failure or timeout; the event loop
+                        // drops the command sender only after successful exit.
                     }
                     Ok(WriterCommand::Clear(ack)) => {
                         while events.try_recv().is_ok() {}
@@ -1166,7 +1219,7 @@ fn run() -> anyhow::Result<()> {
     let tray_ui = ui.as_weak();
     let tray_db = Arc::clone(&db);
     let tray_sort = Arc::clone(&sort_state);
-    let tray_shutdown = writer_command_tx;
+    let tray_shutdown = writer_command_tx.clone();
     let tray_config = Arc::clone(&config_state);
     let tray_timer = Timer::default();
     tray_timer.start(TimerMode::Repeated, Duration::from_millis(250), move || {
@@ -1219,14 +1272,25 @@ fn run() -> anyhow::Result<()> {
                 }
             }
             tray::Command::Exit => {
-                let (ack_tx, ack_rx) = mpsc::sync_channel(1);
-                let _ = tray_shutdown.try_send(WriterCommand::Shutdown(ack_tx));
-                let _ = ack_rx.recv_timeout(Duration::from_secs(2));
-                let _ = tray_db
-                    .lock()
-                    .expect("database mutex poisoned")
-                    .checkpoint();
-                std::process::exit(0);
+                let Some(ui) = tray_ui.upgrade() else { return };
+                ui.set_close_open(true);
+                ui.set_close_busy(true);
+                let saved = exit_handshake(
+                    &tray_enabled,
+                    &tray_shutdown,
+                    collector::settle,
+                    Duration::from_secs(2),
+                );
+                if saved {
+                    let _ = ui.hide();
+                    let _ = slint::quit_event_loop();
+                } else {
+                    ui.set_close_busy(false);
+                    ui.set_close_error(
+                        "保存尚未完成，应用继续运行。请检查目录/磁盘状态后重试退出。".into(),
+                    );
+                    let _ = ui.show();
+                }
             }
         }
     });
@@ -1261,6 +1325,14 @@ fn run() -> anyhow::Result<()> {
         }
     });
     ui.hide()?;
-    slint::run_event_loop()?;
+    run_desktop_event_loop()?;
+    drop(tray_timer);
+    drop(refresh_timer);
+    drop(writer_command_tx);
+    let _ = writer_handle.join();
+    if let Err(error) = db.lock().expect("database mutex poisoned").checkpoint() {
+        tracing::warn!(%error,"final WAL checkpoint deferred; committed data remains in WAL");
+    }
+    tray::remove_icon();
     Ok(())
 }

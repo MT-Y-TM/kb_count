@@ -1,7 +1,7 @@
 use crate::stats::event::InputEvent;
 use crate::stats::policy::{CaptureMode, normalize_app_path};
 use std::collections::HashMap;
-type AggregateKey = (String, String, String, String);
+type AggregateKey = (String, Option<u8>, String, String, String);
 type AggregateCounts = (i64, bool, i64, i64, i64);
 #[derive(Default)]
 #[allow(dead_code)]
@@ -24,6 +24,7 @@ impl Aggregator {
         event.app_path = normalize_app_path(&event.app_path);
         let key = (
             event.local_date.clone(),
+            event.local_hour,
             event.app_path.clone(),
             event.input_type.clone(),
             event.code.clone(),
@@ -43,7 +44,7 @@ impl Aggregator {
             .drain()
             .map(
                 |(
-                    (date, path, kind, code),
+                    (date, hour, path, kind, code),
                     (count, detailed, keyboard_count, mouse_count, wheel_units),
                 )| {
                     let name = std::path::Path::new(&path)
@@ -53,6 +54,7 @@ impl Aggregator {
                         .to_string();
                     InputEvent {
                         local_date: date,
+                        local_hour: hour,
                         app_name: name,
                         app_path: path,
                         input_type: kind.clone(),
@@ -77,6 +79,7 @@ mod tests {
         aggregator.record(
             InputEvent {
                 local_date: "2026-10-11".into(),
+                local_hour: None,
                 app_name: "x".into(),
                 app_path: "x.exe".into(),
                 input_type: "keyboard".into(),
@@ -97,6 +100,7 @@ mod tests {
         aggregator.record(
             InputEvent {
                 local_date: "2026-10-11".into(),
+                local_hour: None,
                 app_name: "x".into(),
                 app_path: "x.exe".into(),
                 input_type: "keyboard".into(),
@@ -120,6 +124,7 @@ mod tests {
         aggregator.record(
             InputEvent {
                 local_date: "2026-10-11".into(),
+                local_hour: None,
                 app_name: "x".into(),
                 app_path: "x.exe".into(),
                 input_type: "mouse".into(),
@@ -145,6 +150,7 @@ mod tests {
         aggregator.record(
             InputEvent {
                 local_date: "2026-10-11".into(),
+                local_hour: None,
                 app_name: "x".into(),
                 app_path: "x.exe".into(),
                 input_type: "mouse".into(),

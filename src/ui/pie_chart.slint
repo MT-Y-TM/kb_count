@@ -1,0 +1,65 @@
+import { ListView } from "std-widgets.slint";
+import { ActionButton } from "components.slint";
+
+export struct PieRow { label: string, detail: string, value: string, percent: string, tint: color, selected: bool }
+
+export component PiePanel inherits Rectangle {
+    in property <bool> dark;
+    in property <bool> short;
+    in property <int> period;
+    in property <int> mode;
+    in property <image> source;
+    in property <bool> has_data;
+    in property <string> total;
+    in property <string> range;
+    in property <string> scope;
+    in property <[PieRow]> rows;
+    callback period-selected(int);
+    callback mode-selected(int);
+    property <color> ink: dark ? #e8effb : #27364f;
+    property <color> muted: dark ? #aab9d0 : #5f708a;
+    property <string> hovered;
+    changed rows => { root.hovered = ""; }
+    border-radius: 10px; border-width: 1px; border-color: dark ? #303c50 : #e5eaf2;
+    background: dark ? #1c2636 : white;
+    VerticalLayout { padding: 16px; spacing: 10px;
+        HorizontalLayout { height: 32px; spacing: 6px;
+            Text { text: "输入占比"; color: root.ink; font-size: 16px; font-weight: 600; }
+            Rectangle { horizontal-stretch: 1; }
+            for label[index] in ["日", "周", "月", "年"]: ActionButton { width: 42px; text: label; primary: root.period == index; clicked => { root.period-selected(index); } }
+        }
+        HorizontalLayout { height: 32px; spacing: 8px;
+            ActionButton { width: 88px; text: "输入构成"; primary: root.mode == 0; clicked => { root.mode-selected(0); } }
+            ActionButton { width: 88px; text: "应用占比"; primary: root.mode == 1; clicked => { root.mode-selected(1); } }
+            Text { min-width: 0px; horizontal-stretch: 1; text: root.scope; color: root.muted; font-size: 12px; overflow: elide; vertical-alignment: center; }
+        }
+        Text { text: root.range; color: root.muted; font-size: 12px; }
+        HorizontalLayout { spacing: 16px;
+            circle := Rectangle { width: root.short ? 146px : 180px; height: root.short ? 146px : 180px;
+                Image { width: 100%; height: 100%; source: root.source; image-fit: contain; }
+                if !root.has_data: Rectangle { x: 12px; y: 12px; width: parent.width - 24px; height: parent.height - 24px; border-radius: self.width/2; border-width: 12px; border-color: root.dark ? #40516a : #dbe3ee; background: transparent; }
+                VerticalLayout { x: 25px; y: root.short ? 44px : 59px; width: parent.width - 50px; height: 60px; spacing: 3px;
+                    Text { text: root.has_data ? root.total : "暂无输入"; color: root.ink; font-size: root.short ? 20px : 24px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                    Text { text: "总输入"; color: root.muted; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                }
+            }
+            ListView { height: root.short ? 146px : 200px;
+                for row in root.rows: Rectangle { height: 40px;
+                    border-radius: 5px;
+                    background: row.selected ? (root.dark ? #243b64 : #e9f0ff) : touch.has-hover ? (root.dark ? #263449 : #f0f4fa) : transparent;
+                    HorizontalLayout { padding-left: 6px; padding-right: 6px; spacing: 8px;
+                        Rectangle { width: 9px; Rectangle { y: (parent.height - 9px)/2; width: 9px; height: 9px; background: row.tint; border-radius: 3px; } }
+                        Text { min-width: 0px; horizontal-stretch: 1; text: row.label; color: root.ink; font-size: 12px; overflow: elide; vertical-alignment: center; }
+                        Text { width: root.short ? 68px : 84px; text: row.value; color: root.ink; font-size: 12px; horizontal-alignment: right; vertical-alignment: center; overflow: elide; }
+                        Text { width: 52px; text: row.percent; color: root.muted; font-size: 12px; horizontal-alignment: right; vertical-alignment: center; }
+                    }
+                    touch := TouchArea {
+                        changed has-hover => { if self.has-hover {root.hovered = row.label + " · " + row.value + " · " + row.percent + " · " + row.detail;} }
+                        moved => { root.hovered = row.label + " · " + row.value + " · " + row.percent + " · " + row.detail; }
+                    }
+                }
+            }
+        }
+        Text { height: 32px; min-width: 0px; text: root.hovered != "" ? root.hovered : root.mode == 0 ? "使用当前应用筛选的完整日汇总；三类互不重叠。" : "全应用占比；最多七个具名应用，其余合并。图例可滚动。"; color: root.muted; font-size: 11px; wrap: word-wrap; overflow: elide; }
+    }
+}

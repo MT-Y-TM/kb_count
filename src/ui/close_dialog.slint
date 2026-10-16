@@ -1,0 +1,30 @@
+import { ActionButton } from "components.slint";
+
+export component CloseDialog inherits Rectangle {
+    in property <bool> dark;
+    in property <bool> active;
+    in property <bool> busy;
+    in property <string> error;
+    callback hide-panel();
+    callback exit-app();
+    callback canceled();
+    width: 456px; height: 240px;
+    border-radius: 12px; border-width: 1px; border-color: dark ? #495975 : #c5d0e1;
+    background: dark ? #1c2636 : white;
+    changed active => { if root.active { cancel.focus(); } }
+    TouchArea { scroll-event => { return accept; } }
+    FocusScope { width: 100%; height: 100%;
+        key-pressed(event) => { if event.text == Key.Escape && !root.busy { root.canceled(); return accept; } return reject; }
+        VerticalLayout { padding: 20px; spacing: 12px;
+            Text { text: "关闭 kb_count"; color: root.dark ? #e8effb : #27364f; font-size: 20px; font-weight: 600; }
+            Text { text: "仅关闭窗口会保留当前统计状态，并继续驻留系统托盘。退出应用会停止统计并保存待写入的数据。"; color: root.dark ? #aab9d0 : #5f708a; font-size: 13px; wrap: word-wrap; }
+            Text { min-height: 40px; text: root.busy ? "正在保存统计，请稍候…" : root.error; color: root.dark ? #f0b7ae : #a53931; font-size: 12px; wrap: word-wrap; }
+            HorizontalLayout { spacing: 8px;
+                cancel := ActionButton { text: "取消"; enabled: !root.busy; clicked => { root.canceled(); } }
+                Rectangle { horizontal-stretch: 1; }
+                ActionButton { text: "仅关闭窗口"; enabled: !root.busy; clicked => { root.hide-panel(); } }
+                ActionButton { text: "退出应用"; enabled: !root.busy; clicked => { root.exit-app(); } }
+            }
+        }
+    }
+}

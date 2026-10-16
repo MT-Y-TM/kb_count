@@ -51,9 +51,9 @@ kb_count 标识为蓝底白色 K，字形使用矢量多边形，不依赖字体
 
 相邻月份文字对比度为浅色 4.75:1、深色 4.70:1；深色选中日期白字对比度 4.56:1。预览为 `calendar-{100,125,150,175,200,minimum}.bmp`、`calendar-minimum-light.bmp` 和 `calendar-export-{100,125,150,175,200,minimum}.bmp`。这些预览使用样例数据；测试不会调用真实 CSV 保存对话框。
 
-2026-10-16 本轮验证：`cargo fmt --all -- --check`、`cargo check --locked --offline`、`cargo clippy --all-targets --locked --offline -- -D warnings` 均通过；开启离线预览后的完整 `cargo test --locked --offline` 为 35 项通过、0 失败，测试耗时 64.66 秒。上述为功能回归时长，不是后台资源占用测量。
+2026-10-16 日期选择阶段验证：`cargo fmt --all -- --check`、`cargo check --locked --offline`、`cargo clippy --all-targets --locked --offline -- -D warnings` 均通过；开启离线预览后的完整 `cargo test --locked --offline` 为 35 项通过、0 失败，测试耗时 64.66 秒。上述为功能回归时长，不是后台资源占用测量。
 
-`cargo build --release --locked --offline` 成功，优化编译耗时 5 分 29 秒；产物 `target/release/kb_count.exe` 为 14,737,408 字节。`tools/verify_release.py` 确认 x64 GUI 子系统、十二种内嵌图标尺寸和版本资源完整。
+日期选择阶段的 `cargo build --release --locked --offline` 成功，优化编译耗时 5 分 29 秒；产物 `target/release/kb_count.exe` 为 14,737,408 字节。`tools/verify_release.py` 确认 x64 GUI 子系统、十二种内嵌图标尺寸和版本资源完整。
 
 长页面的横向滚动限定在键盘区域，分类表与页面保持同宽，避免最小窗口下鼠标次数被裁切。垂直滚动支持从键盘区域传递到整页，滚动后页脚提供“回到顶部”。右侧特殊键的悬停提示向左对齐，并给第一排提示保留顶部空间。
 
@@ -66,3 +66,5 @@ kb_count 标识为蓝底白色 K，字形使用矢量多边形，不依赖字体
 各缩放档及 820×440 最小窗口还回归真实 Slint 滚动/点击事件：滚动至各长页底部、键盘横向滚动隔离、从键盘区域垂直滚动、应用查询、进入策略管理、CSV 导出按钮、同一位置的二次确认、取消、关闭面板取消以及返回顶部。清空检查使用生产代码的确认状态函数，确认后只累计测试回调次数，不执行真实数据清理或文件导出。相关预览为 `scroll-{100,125,150,175,200,minimum}-{1,2,3}-bottom.bmp` 和 `clear-{100,125,150,175,200,minimum}-confirm.bmp`。
 
 仍需实机验证：不同显示器的字体抗锯齿、Windows 单独文本大小设置、跨屏 DPI 切换、显示器工作区边界以及低分辨率第三方源图标的主观清晰度。离线缩放通过不代表这些场景已完成验证。
+
+新增活动墙、折线、饼图和关闭确认的行为及验证记录见 [活动图表说明](activity-trends.md)。

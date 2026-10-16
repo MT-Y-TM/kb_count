@@ -58,6 +58,7 @@ mod tests {
         db.record_batch(&[
             InputEvent {
                 local_date: "2026-10-10".into(),
+                local_hour: None,
                 app_name: "a.exe".into(),
                 app_path: "C:/a.exe".into(),
                 input_type: "keyboard".into(),
@@ -70,6 +71,7 @@ mod tests {
             },
             InputEvent {
                 local_date: "2026-10-11".into(),
+                local_hour: None,
                 app_name: "a.exe".into(),
                 app_path: "C:/a.exe".into(),
                 input_type: "mouse".into(),

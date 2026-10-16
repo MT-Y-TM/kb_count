@@ -1,0 +1,193 @@
+import { ScrollView, LineEdit, ListView } from "std-widgets.slint";
+import { ActionButton } from "components.slint";
+import { PiePanel, PieRow } from "pie_chart.slint";
+export { PieRow }
+
+export struct ActivityCell { date: string, value: string, level: int, week: int, weekday: int, future: bool, month_label: string }
+export struct TrendSeries { label: string, tint: color, commands: string, source: image, shown: bool }
+export struct TrendPoint { label: string, description: string }
+export struct TrendTick { position: float, label: string }
+export struct ChartApp { name: string, path: string }
+
+component SeriesToggle inherits Rectangle {
+    in property <string> label;
+    in property <color> tint;
+    in property <bool> shown;
+    in property <bool> dark;
+    callback toggled();
+    height: 30px; border-radius: 5px;
+    background: shown ? (dark ? #263449 : #f0f4fa) : transparent;
+    border-width: 1px; border-color: focus.has-focus ? tint : (dark ? #40516a : #cbd5e3);
+    accessible-role: button; accessible-label: label;
+    accessible-checkable: true; accessible-checked: shown;
+    accessible-action-default => { root.toggled(); }
+    forward-focus: focus;
+    HorizontalLayout { padding-left: 7px; padding-right: 7px; spacing: 5px;
+        Rectangle { width: 10px; Rectangle { y: (parent.height - 3px)/2; width: 10px; height: 3px; background: root.shown ? root.tint : (root.dark ? #72829a : #8895a8); } }
+        Text { text: root.label; color: root.shown ? (root.dark ? #e8effb : #27364f) : (root.dark ? #aab9d0 : #5f708a); font-size: 12px; vertical-alignment: center; }
+    }
+    focus := FocusScope { key-pressed(event) => { if event.text == Key.Return || event.text == " " {root.toggled();return accept;} return reject; } }
+    TouchArea { mouse-cursor: pointer; clicked => { focus.focus(); root.toggled(); } }
+}
+
+export component ActivityPage inherits Rectangle {
+    in property <bool> dark;
+    in property <bool> short_plot;
+    in property <int> view;
+    in property <int> pie_mode;
+    in property <[PieRow]> pie_rows;
+    in property <image> pie_source;
+    in property <bool> pie_has_data;
+    in property <string> pie_total;
+    in property <string> pie_range;
+    in property <string> pie_scope;
+    callback view-selected(int);
+    callback pie-mode-selected(int);
+    in property <string> year;
+    in property <string> annual_summary;
+    in property <string> summary;
+    in property <string> range;
+    in property <string> note;
+    in property <string> app_name;
+    in property <bool> app_selected;
+    in property <int> period;
+    in property <[ActivityCell]> cells;
+    in property <int> columns: 53;
+    in property <[TrendSeries]> series;
+    in property <[TrendPoint]> points;
+    in property <[TrendTick]> ticks;
+    in property <string> maximum;
+    in property <string> middle;
+    in-out property <length> scroll_y;
+    callback period-selected(int);
+    callback app-requested();
+    callback all-apps-selected();
+    callback year-shift(int);
+    callback day-selected(string);
+    callback series-toggled(int);
+    property <color> ink: dark ? #e8effb : #27364f;
+    property <color> muted: dark ? #aab9d0 : #5f708a;
+    property <color> line: dark ? #303c50 : #e5eaf2;
+    property <string> activity_hover: "悬停查看每日输入，点击某一天查看小时趋势";
+    changed cells => { root.activity_hover = "悬停查看每日输入，点击某一天查看小时趋势"; }
+    ScrollView {
+        width: 100%; height: 100%; viewport-y <=> root.scroll_y;
+        viewport-width: self.visible-width;
+        horizontal-scrollbar-policy: always-off;
+        VerticalLayout { padding-right: 6px; spacing: 12px;
+            HorizontalLayout { height: 32px; spacing: 8px;
+                ActionButton { width: 90px; text: "全部应用"; primary: !root.app_selected; clicked => { root.all-apps-selected(); } }
+                ActionButton { width: 90px; text: root.app_selected ? "更换应用" : "选择应用"; clicked => { root.app-requested(); } }
+                Text { horizontal-stretch: 1; min-width: 0px; text: root.app_selected ? root.app_name : "跨应用汇总"; color: root.ink; font-size: 13px; vertical-alignment: center; overflow: elide; }
+                ActionButton { width: 52px; text: "折线"; primary: root.view == 0; clicked => { root.view-selected(0); } }
+                ActionButton { width: 52px; text: "占比"; primary: root.view == 1; clicked => { root.view-selected(1); } }
+            }
+            Rectangle { min-height: 260px; border-radius: 10px; border-width: 1px; border-color: root.line; background: root.dark ? #1c2636 : white;
+                VerticalLayout { padding: 16px; spacing: 8px;
+                    HorizontalLayout { height: 32px; spacing: 8px;
+                        Text { text: root.year + " 年活动"; color: root.ink; font-size: 16px; font-weight: 600; }
+                        Rectangle { horizontal-stretch: 1; }
+                        ActionButton { text: "上一年"; clicked => { root.year-shift(-1); } }
+                        ActionButton { text: "下一年"; clicked => { root.year-shift(1); } }
+                    }
+                    Text { text: root.annual_summary; color: root.muted; font-size: 12px; }
+                    wall := Rectangle { height: 134px;
+                        property <length> pitch: (self.width - 30px) / root.columns;
+                        Text { x: 0px; y: 22px; text: "一"; color: root.muted; font-size: 11px; }
+                        Text { x: 0px; y: 54px; text: "三"; color: root.muted; font-size: 11px; }
+                        Text { x: 0px; y: 86px; text: "五"; color: root.muted; font-size: 11px; }
+                        for cell in root.cells: Rectangle {
+                            x: 28px + cell.week * wall.pitch; y: 20px + cell.weekday * 16px;
+                            width: min(12px, wall.pitch - 2px); height: min(12px, wall.pitch - 2px); border-radius: 2px;
+                            background: cell.future ? (root.dark ? #202b3c : #f0f3f7) : cell.level == 0 ? (root.dark ? #303c50 : #e4eaf1) : cell.level == 1 ? (root.dark ? #174b3c : #b6e3c7) : cell.level == 2 ? (root.dark ? #237456 : #69bf93) : cell.level == 3 ? #299765 : (root.dark ? #70d49b : #166442);
+                            border-width: day-touch.has-hover ? 1px : 0px; border-color: root.ink;
+                            accessible-role: button; accessible-label: cell.date + "，输入 " + cell.value;
+                            accessible-action-default => { root.day-selected(cell.date); }
+                            if cell.month_label != "": Text { x: 0px; y: -20px - cell.weekday * 16px; text: cell.month_label; color: root.muted; font-size: 10px; }
+                            day-touch := TouchArea { mouse-cursor: pointer;
+                                changed has-hover => { if self.has-hover { root.activity_hover = cell.date + " · 总输入 " + cell.value; } }
+                                moved => { root.activity_hover = cell.date + " · 总输入 " + cell.value; }
+                                clicked => { root.day-selected(cell.date); }
+                            }
+                        }
+                    }
+                    HorizontalLayout { height: 20px; spacing: 5px;
+                        Text { text: root.activity_hover; color: root.muted; font-size: 11px; overflow: elide; }
+                        Rectangle { horizontal-stretch: 1; }
+                        Text { text: "少"; color: root.muted; font-size: 10px; }
+                        for level in [0,1,2,3,4]: Rectangle { width: 10px; height: 10px; background: level == 0 ? (root.dark ? #303c50 : #e4eaf1) : level == 1 ? (root.dark ? #174b3c : #b6e3c7) : level == 2 ? (root.dark ? #237456 : #69bf93) : level == 3 ? #299765 : (root.dark ? #70d49b : #166442); border-radius: 2px; }
+                        Text { text: "多"; color: root.muted; font-size: 10px; }
+                    }
+                }
+            }
+            if root.view == 1: PiePanel {
+                dark: root.dark; short: root.short_plot; period: root.period; mode: root.pie_mode;
+                rows: root.pie_rows; source: root.pie_source; has_data: root.pie_has_data;
+                total: root.pie_total; range: root.pie_range; scope: root.pie_scope;
+                period-selected(index) => { root.period-selected(index); }
+                mode-selected(index) => { root.pie-mode-selected(index); }
+            }
+            if root.view == 0: Rectangle { border-radius: 10px; border-width: 1px; border-color: root.line; background: root.dark ? #1c2636 : white;
+                VerticalLayout { padding: 16px; spacing: 10px;
+                    HorizontalLayout { height: 32px; spacing: 6px;
+                        Text { text: "输入趋势"; color: root.ink; font-size: 16px; font-weight: 600; }
+                        Rectangle { horizontal-stretch: 1; }
+                        for label[index] in ["日", "周", "月", "年"]: ActionButton { width: 42px; text: label; primary: root.period == index; clicked => { root.period-selected(index); } }
+                    }
+                    Text { text: root.range; color: root.muted; font-size: 12px; }
+                    Text { text: root.summary; color: root.ink; font-size: 13px; wrap: word-wrap; }
+                    Text { text: root.note; color: root.muted; font-size: 11px; wrap: word-wrap; }
+                    graph := Rectangle { height: root.short_plot ? 154px : 224px;
+                        Text { x: 0px; y: 0px; width: 50px; text: root.maximum; color: root.muted; font-size: 11px; horizontal-alignment: right; }
+                        Text { x: 0px; y: root.short_plot ? 57px : 92px; width: 50px; text: root.middle; color: root.muted; font-size: 11px; horizontal-alignment: right; }
+                        Text { x: 0px; y: root.short_plot ? 118px : 188px; width: 50px; text: "0"; color: root.muted; font-size: 11px; horizontal-alignment: right; }
+                        plot := Rectangle { x: 60px; y: 8px; width: parent.width - 84px; height: root.short_plot ? 122px : 192px; clip: true;
+                            for level in [0, 1, 2, 3, 4]: Rectangle { y: level * (parent.height - 1px) / 4; width: 100%; height: 1px; background: root.line; }
+                            for item in root.series: Image {
+                                width: parent.width; height: parent.height; visible: item.shown;
+                                source: item.source; image-fit: fill;
+                            }
+                            in-out property <int> hover_index;
+                            if graph-touch.has-hover && root.points.length > 0: Rectangle { x: plot.hover_index * plot.width / max(1, root.points.length - 1); width: 1px; height: 100%; background: root.dark ? #70829e : #8a9ab2; }
+                            graph-touch := TouchArea { changed mouse-x => { plot.hover_index = round(self.mouse-x / max(1px, plot.width) * (root.points.length - 1)); } }
+                        }
+                        for tick in root.ticks: Text { x: 60px + tick.position * plot.width - 18px; y: root.short_plot ? 137px : 207px; width: 42px; text: tick.label; color: root.muted; font-size: 10px; horizontal-alignment: center; }
+                    }
+                    HorizontalLayout { height: 32px; spacing: 6px;
+                        for item[index] in root.series: SeriesToggle { label: item.label; tint: item.tint; shown: item.shown; dark: root.dark; toggled => { root.series-toggled(index); } }
+                    }
+                    Text { min-height: 32px; text: graph-touch.has-hover && root.points.length > 0 ? root.points[clamp(plot.hover_index, 0, root.points.length - 1)].description : "悬停查看计数 · 图例开关曲线 · 分类仅含详细采集数据"; color: root.muted; font-size: 11px; wrap: word-wrap; }
+                }
+            }
+        }
+    }
+}
+
+export component AppPicker inherits Rectangle {
+    in property <bool> dark;
+    in property <bool> active;
+    in-out property <string> search;
+    in property <[ChartApp]> apps;
+    callback chosen(string);
+    callback dismissed();
+    width: 600px; height: 392px;
+    border-radius: 12px; border-width: 1px; border-color: dark ? #495975 : #c5d0e1; background: dark ? #1c2636 : white;
+    changed active => { if root.active { search-field.focus(); } }
+    TouchArea { scroll-event => { return accept; } }
+    FocusScope { width: 100%; height: 100%;
+        key-pressed(event) => { if event.text == Key.Escape { root.dismissed(); return accept; } return reject; }
+        Text { x: 16px; y: 16px; text: "选择应用 · 包含历史应用"; color: root.dark ? #e8effb : #27364f; font-size: 16px; font-weight: 600; }
+        search-field := LineEdit { x: 16px; y: 48px; width: parent.width - 32px; text <=> root.search; placeholder-text: "搜索应用名称或路径"; accepted => { if root.apps.length > 0 { root.chosen(root.apps[0].path); } } }
+        ListView { x: 16px; y: 94px; width: parent.width - 32px; height: 238px;
+            for app in root.apps: Rectangle { height: 54px; background: touch.has-hover ? (root.dark ? #304465 : #e9f0ff) : transparent;
+                VerticalLayout { padding: 6px; spacing: 3px;
+                    Text { text: app.name; color: root.dark ? #e8effb : #27364f; font-size: 13px; overflow: elide; }
+                    Text { text: app.path; color: root.dark ? #aab9d0 : #5f708a; font-size: 11px; overflow: elide; }
+                }
+                touch := TouchArea { mouse-cursor: pointer; clicked => { root.chosen(app.path); } }
+            }
+        }
+        if root.apps.length == 0: Text { x: 16px; y: 140px; width: parent.width - 32px; horizontal-alignment: center; text: "没有匹配的历史应用"; color: root.dark ? #aab9d0 : #5f708a; }
+        ActionButton { x: parent.width - self.width - 16px; y: 344px; text: "取消"; clicked => { root.dismissed(); } }
+    }
+}

@@ -1,6 +1,8 @@
 #[derive(Debug, Clone)]
 pub struct InputEvent {
     pub local_date: String,
+    /// Local hour bucket only; never a per-event timestamp. None for legacy data.
+    pub local_hour: Option<u8>,
     pub app_name: String,
     pub app_path: String,
     pub input_type: String,

@@ -3,6 +3,27 @@ use std::sync::{Arc, OnceLock};
 use std::thread;
 static REQUEST: AtomicU8 = AtomicU8::new(0);
 static CAPTURE_ENABLED: OnceLock<Arc<AtomicBool>> = OnceLock::new();
+#[cfg(windows)]
+static TRAY_WINDOW: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+pub fn remove_icon() {
+    #[cfg(windows)]
+    unsafe {
+        use windows::Win32::{
+            Foundation::HWND,
+            UI::Shell::{NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW},
+        };
+        let data = NOTIFYICONDATAW {
+            cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+            hWnd: HWND(TRAY_WINDOW.load(Ordering::Acquire) as *mut _),
+            uID: 1,
+            ..Default::default()
+        };
+        let _ = Shell_NotifyIconW(NIM_DELETE, &data);
+    }
+}
+pub fn request_exit() {
+    REQUEST.store(3, Ordering::Release);
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
     Open,
@@ -88,6 +109,7 @@ unsafe fn run_windows() {
         Err(_) => return,
     };
     let mut data = NOTIFYICONDATAW::default();
+    TRAY_WINDOW.store(hwnd.0 as isize, Ordering::Release);
     data.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
     data.hWnd = hwnd;
     data.uID = 1;

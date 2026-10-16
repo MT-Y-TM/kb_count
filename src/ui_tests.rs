@@ -6,7 +6,11 @@ use std::io::Write;
 use std::rc::Rc;
 
 type UiEvent = Box<dyn FnOnce() + Send>;
-struct PreviewPlatform(Rc<MinimalSoftwareWindow>, mpsc::SyncSender<UiEvent>);
+struct PreviewPlatform(
+    Rc<MinimalSoftwareWindow>,
+    mpsc::SyncSender<UiEvent>,
+    Rc<std::cell::Cell<bool>>,
+);
 struct PreviewProxy(mpsc::SyncSender<UiEvent>);
 
 impl slint::platform::EventLoopProxy for PreviewProxy {
@@ -21,6 +25,12 @@ impl slint::platform::EventLoopProxy for PreviewProxy {
 }
 
 impl Platform for PreviewPlatform {
+    fn run_event_loop(&self) -> Result<(), PlatformError> {
+        Ok(())
+    }
+    fn set_event_loop_quit_on_last_window_closed(&self, value: bool) {
+        self.2.set(value);
+    }
     fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, PlatformError> {
         Ok(self.0.clone())
     }
@@ -85,12 +95,27 @@ fn refresh_preserves_ui_filters_and_privacy_state() {
 fn verify_ui_state() {
     let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
     let (event_sender, event_receiver) = mpsc::sync_channel::<UiEvent>(64);
-    slint::platform::set_platform(Box::new(PreviewPlatform(window.clone(), event_sender)))
-        .expect("preview backend");
+    let quit_on_last_window = Rc::new(std::cell::Cell::new(true));
+    slint::platform::set_platform(Box::new(PreviewPlatform(
+        window.clone(),
+        event_sender,
+        quit_on_last_window.clone(),
+    )))
+    .expect("preview backend");
     let ui = MainWindow::new().expect("UI");
     bind_app_search(&ui);
     bind_panel_close(&ui);
     date_picker::bind(&ui);
+    if std::env::var_os("KB_COUNT_ACTIVITY_ONLY").is_some() {
+        verify_activity_and_close(&ui, &window);
+        ui.hide().unwrap();
+        run_desktop_event_loop().unwrap();
+        assert!(
+            !quit_on_last_window.get(),
+            "tray mode must require an explicit event-loop quit"
+        );
+        return;
+    }
     window.set_size(slint::PhysicalSize::new(1060, 780));
     let mut db = storage::database::Database::open(std::path::Path::new(":memory:")).unwrap();
     let date = "2026-10-15";
@@ -113,6 +138,7 @@ fn verify_ui_state() {
         db.record_batch(&[
             stats::event::InputEvent {
                 local_date: date.into(),
+                local_hour: None,
                 app_name: (*name).into(),
                 app_path: format!("C:/Preview/{name}"),
                 input_type: "keyboard".into(),
@@ -125,6 +151,7 @@ fn verify_ui_state() {
             },
             stats::event::InputEvent {
                 local_date: date.into(),
+                local_hour: None,
                 app_name: (*name).into(),
                 app_path: format!("C:/Preview/{name}"),
                 input_type: "mouse".into(),
@@ -137,6 +164,7 @@ fn verify_ui_state() {
             },
             stats::event::InputEvent {
                 local_date: date.into(),
+                local_hour: None,
                 app_name: (*name).into(),
                 app_path: format!("C:/Preview/{name}"),
                 input_type: "mouse".into(),
@@ -520,6 +548,8 @@ fn verify_ui_state() {
                     ui.window()
                         .dispatch_event(slint::platform::WindowEvent::CloseRequested);
                     assert!(!ui.get_calendar_open(), "closing panel dismisses calendar");
+                    assert!(ui.get_close_open());
+                    ui.invoke_close_hide_clicked();
                     ui.show().unwrap();
                     slint::platform::update_timers_and_animations();
                     assert_eq!(
@@ -569,7 +599,13 @@ fn verify_ui_state() {
                     assert!(ui.get_clear_confirmation());
                     ui.window()
                         .dispatch_event(slint::platform::WindowEvent::CloseRequested);
-                    assert!(!ui.window().is_visible(), "closing hides the panel");
+                    assert!(ui.window().is_visible(), "close first asks for a choice");
+                    assert!(ui.get_close_open());
+                    ui.invoke_close_hide_clicked();
+                    assert!(
+                        !ui.window().is_visible(),
+                        "hide choice keeps background mode"
+                    );
                     assert!(
                         !ui.get_clear_confirmation(),
                         "closing cancels a pending clear"
@@ -647,6 +683,7 @@ fn verify_ui_state() {
                 let count = 12_345 / ((index as i64 + 1) * divisor);
                 db.record_batch(&[stats::event::InputEvent {
                     local_date: date.into(),
+                    local_hour: None,
                     app_name: path.rsplit('\\').next().unwrap().into(),
                     app_path: path.clone(),
                     input_type: "keyboard".into(),
@@ -729,7 +766,526 @@ fn verify_ui_state() {
             "hidden panels do not request icons"
         );
     }
+    verify_activity_and_close(&ui, &window);
     ui.hide().unwrap();
+    run_desktop_event_loop().unwrap();
+    assert!(
+        !quit_on_last_window.get(),
+        "tray mode must require an explicit event-loop quit"
+    );
+}
+
+fn verify_activity_and_close(ui: &MainWindow, window: &MinimalSoftwareWindow) {
+    use crate::storage::history::sample;
+    use chrono::NaiveDate;
+    ui.set_version_text(env!("CARGO_PKG_VERSION").into());
+    ui.set_status_text("离线预览 · 测试聚合数据".into());
+    let mut db = storage::database::Database::open(std::path::Path::new(":memory:")).unwrap();
+    let mut batch = Vec::new();
+    for ordinal in 1..=366 {
+        let date = NaiveDate::from_yo_opt(2024, ordinal).unwrap();
+        let hour = Some((ordinal % 10 + 8) as u8);
+        for (code, value) in [
+            ("key", 400 + i64::from(ordinal % 29) * 50),
+            ("left", 80 + i64::from(ordinal % 7) * 12),
+            ("right", 25),
+            ("wheel_up", 36),
+            ("wheel_down", 27),
+        ] {
+            batch.push(sample(
+                &date.to_string(),
+                hour,
+                "C:/Preview/Editor.exe",
+                code,
+                value,
+            ));
+        }
+        if ordinal % 3 == 0 {
+            batch.push(sample(
+                &date.to_string(),
+                Some(19),
+                "C:/Preview/Terminal.exe",
+                "key",
+                210,
+            ));
+        }
+    }
+    for index in 0..9 {
+        batch.push(sample(
+            "2024-10-15",
+            Some(18),
+            &format!("C:/Preview/Tool{index}.exe"),
+            "key",
+            index + 1,
+        ));
+    }
+    db.record_batch(&batch).unwrap();
+    let db = Arc::new(Mutex::new(db));
+    charts::bind(ui, db.clone());
+    let weak = ui.as_weak();
+    let query_db = db.clone();
+    ui.on_query_clicked(move || {
+        let ui = weak.upgrade().unwrap();
+        let date = ui.get_query_date();
+        refresh_overview(&ui, &query_db.lock().unwrap(), &date, RankingSort::Total).unwrap();
+    });
+    let exits = Rc::new(std::cell::Cell::new(0));
+    ui.on_exit_requested({
+        let exits = exits.clone();
+        move || exits.set(exits.get() + 1)
+    });
+    let click = |x, y| {
+        let position = slint::LogicalPosition::new(x, y);
+        let button = slint::platform::PointerEventButton::Left;
+        ui.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerPressed { position, button });
+        ui.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerReleased { position, button });
+        slint::platform::update_timers_and_animations();
+    };
+    for (label, scale, width, height) in [
+        ("100", 1.0, 1280, 720),
+        ("125", 1.25, 1280, 720),
+        ("150", 1.5, 1280, 720),
+        ("175", 1.75, 1680, 945),
+        ("200", 2.0, 1920, 1080),
+        ("minimum", 1.0, 820, 440),
+    ] {
+        window
+            .window()
+            .dispatch_event(slint::platform::WindowEvent::ScaleFactorChanged {
+                scale_factor: scale,
+            });
+        window.set_size(slint::PhysicalSize::new(width, height));
+        let w = width as f32 / scale;
+        let h = height as f32 / scale;
+        ui.show().unwrap();
+        for dark in [false, true] {
+            ui.set_dark_mode(dark);
+            slint::platform::update_timers_and_animations();
+            if std::env::var_os("KB_COUNT_RENDER_UI").is_some() {
+                thread::sleep(Duration::from_millis(250));
+            }
+            ui.set_date_text("2024-10-15".into());
+            ui.set_query_date("2024-10-15".into());
+            ui.set_chart_view(0);
+            ui.set_pie_mode(0);
+            ui.set_selected_page(4);
+            ui.invoke_chart_all_apps_selected();
+            ui.invoke_charts_requested();
+            assert_eq!(ui.get_activity_cells().row_count(), 366);
+            assert_eq!(ui.get_trend_series().row_count(), 6);
+            assert_eq!(ui.get_activity_columns(), 53);
+            ui.invoke_chart_year_shift(-12);
+            assert_eq!(
+                ui.get_activity_columns(),
+                54,
+                "Sunday-start leap year needs 54 columns"
+            );
+            ui.invoke_chart_year_shift(12);
+            let compact = ui.get_compact_layout();
+            let padding = if compact { 12.0 } else { 26.0 };
+            let content_x = if w < 960.0 { 129.0 } else { 169.0 } + padding;
+            let content_y = if compact { 114.0 } else { 156.0 };
+            for period in 0..4 {
+                ui.set_page_scroll_y(0.0);
+                slint::platform::update_timers_and_animations();
+                ui.window()
+                    .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                        position: slint::LogicalPosition::new(content_x + 4.0, content_y + 10.0),
+                        delta_x: 0.0,
+                        delta_y: -316.0,
+                    });
+                slint::platform::update_timers_and_animations();
+                if period == 0 {
+                    save_preview(window, &format!("activity-controls-{label}"));
+                }
+                click(
+                    w - padding - 187.0 + 48.0 * period as f32,
+                    content_y + 348.0 + ui.get_page_scroll_y(),
+                );
+                assert_eq!(
+                    ui.get_trend_period(),
+                    period,
+                    "period selector {period} at {label}"
+                );
+                let length = match period {
+                    0 => 24,
+                    1 => 7,
+                    2 => 31,
+                    _ => 12,
+                };
+                assert_eq!(ui.get_trend_points().row_count(), length);
+                assert!(
+                    ui.get_trend_series()
+                        .row_data(0)
+                        .unwrap()
+                        .commands
+                        .contains('L')
+                );
+            }
+            ui.invoke_chart_period_selected(2);
+            ui.set_page_scroll_y(0.0);
+            slint::platform::update_timers_and_animations();
+            let theme = if dark { "dark" } else { "light" };
+            save_preview(window, &format!("activity-{theme}-{label}-annual"));
+            click(w - padding - 135.0, content_y + 76.0);
+            assert_eq!(ui.get_activity_year(), "2023");
+            assert_eq!(
+                ui.get_keyboard_text(),
+                "0",
+                "year selection refreshes the overview too"
+            );
+            click(w - padding - 61.0, content_y + 76.0);
+            assert_eq!(ui.get_activity_cells().row_count(), 366);
+            assert_eq!(
+                ui.get_keyboard_text(),
+                format_count(db.lock().unwrap().totals("2024-10-15").unwrap().0)
+            );
+            if label == "100" {
+                click(content_x + 50.0, content_y + 152.0);
+                assert_eq!(
+                    ui.get_query_date(),
+                    "2024-01-01",
+                    "heatmap cell opens its actual date"
+                );
+                assert_eq!(ui.get_trend_period(), 0);
+                ui.set_query_date("2024-10-15".into());
+                ui.invoke_query_clicked();
+                ui.invoke_chart_period_selected(2);
+            }
+            // Open the real application picker and choose a search result.
+            click(content_x + 125.0, content_y + 16.0);
+            assert!(ui.get_app_picker_open(), "app picker at {label}");
+            ui.set_chart_app_search("editor".into());
+            slint::platform::update_timers_and_animations();
+            assert_eq!(ui.get_chart_apps().row_count(), 1);
+            save_preview(window, &format!("activity-{theme}-{label}-apps"));
+            click((w - 600.0) / 2.0 + 160.0, (h - 392.0) / 2.0 + 121.0);
+            assert!(!ui.get_app_picker_open());
+            assert!(ui.get_trend_app_path().ends_with("editor.exe"));
+            assert_eq!(ui.get_trend_app_name(), "editor.exe");
+            for period in 0..4 {
+                ui.invoke_chart_period_selected(period);
+                assert_eq!(
+                    ui.get_trend_points().row_count(),
+                    match period {
+                        0 => 24,
+                        1 => 7,
+                        2 => 31,
+                        _ => 12,
+                    }
+                );
+            }
+            ui.invoke_chart_period_selected(2);
+            ui.set_page_scroll_y(-10_000.0);
+            slint::platform::update_timers_and_animations();
+            save_preview(window, &format!("activity-{theme}-{label}-trend"));
+            if label == "100" {
+                click(
+                    content_x + 60.0,
+                    h - padding - 32.0 - if compact { 10.0 } else { 18.0 } - 74.0,
+                );
+            } else {
+                ui.invoke_chart_series_toggled(0);
+            }
+            assert!(!ui.get_trend_series().row_data(0).unwrap().shown);
+            ui.invoke_chart_series_toggled(1);
+            assert!(
+                ui.get_trend_maximum().parse::<i32>().unwrap() < 200,
+                "hiding large series rescales mouse curves"
+            );
+            if ["100", "minimum", "200"].contains(&label) {
+                save_preview(window, &format!("activity-{theme}-{label}-mouse"));
+            }
+            ui.invoke_chart_period_selected(1);
+            assert!(
+                !ui.get_trend_series().row_data(0).unwrap().shown,
+                "visibility survives period changes"
+            );
+            ui.invoke_chart_series_toggled(0);
+            ui.invoke_chart_series_toggled(1);
+            ui.invoke_chart_all_apps_selected();
+            assert_eq!(ui.get_trend_app_path(), "");
+            // Pie views use complete daily totals, not the hourly subset.
+            ui.set_page_scroll_y(0.0);
+            slint::platform::update_timers_and_animations();
+            click(w - padding - 38.0, content_y + 16.0);
+            assert_eq!(ui.get_chart_view(), 1, "pie view button at {label}");
+            for period in 0..4 {
+                ui.set_page_scroll_y(0.0);
+                ui.window()
+                    .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                        position: slint::LogicalPosition::new(content_x + 4.0, content_y + 10.0),
+                        delta_x: 0.0,
+                        delta_y: -316.0,
+                    });
+                slint::platform::update_timers_and_animations();
+                click(
+                    w - padding - 187.0 + 48.0 * period as f32,
+                    content_y + 348.0 + ui.get_page_scroll_y(),
+                );
+                assert_eq!(ui.get_trend_period(), period);
+                let (from, to) = analytics::Period::from_index(period)
+                    .range(NaiveDate::from_ymd_opt(2024, 10, 15).unwrap());
+                let expected = db
+                    .lock()
+                    .unwrap()
+                    .history_daily(&from.to_string(), &to.to_string(), None)
+                    .unwrap()
+                    .iter()
+                    .map(|(_, c)| c.total())
+                    .sum::<i64>();
+                assert_eq!(ui.get_pie_rows().row_count(), 3);
+                assert_eq!(
+                    ui.get_pie_rows()
+                        .iter()
+                        .map(|r| r.value.replace(',', "").parse::<i64>().unwrap())
+                        .sum::<i64>(),
+                    expected
+                );
+                assert!(ui.get_pie_has_data());
+                assert_eq!(ui.get_pie_source().size().width, 240);
+            }
+            ui.invoke_chart_period_selected(2);
+            ui.set_page_scroll_y(-10_000.0);
+            slint::platform::update_timers_and_animations();
+            save_preview(window, &format!("pie-{theme}-{label}-input"));
+            click(
+                content_x + 156.0,
+                content_y + 390.0 + ui.get_page_scroll_y(),
+            );
+            assert_eq!(ui.get_pie_mode(), 1, "application pie mode at {label}");
+            assert_eq!(ui.get_pie_rows().row_count(), 8);
+            ui.invoke_chart_app_requested();
+            ui.set_chart_app_search("editor".into());
+            slint::platform::update_timers_and_animations();
+            ui.invoke_chart_app_chosen(ui.get_chart_apps().row_data(0).unwrap().path);
+            for period in 0..4 {
+                ui.invoke_chart_period_selected(period);
+                let (from, to) = analytics::Period::from_index(period)
+                    .range(NaiveDate::from_ymd_opt(2024, 10, 15).unwrap());
+                let expected = db
+                    .lock()
+                    .unwrap()
+                    .history_daily(&from.to_string(), &to.to_string(), None)
+                    .unwrap()
+                    .iter()
+                    .map(|(_, c)| c.total())
+                    .sum::<i64>();
+                assert_eq!(
+                    ui.get_pie_rows()
+                        .iter()
+                        .map(|r| r.value.replace(',', "").parse::<i64>().unwrap())
+                        .sum::<i64>(),
+                    expected,
+                    "app pie keeps the global denominator"
+                );
+                assert!(
+                    ui.get_pie_rows()
+                        .iter()
+                        .any(|r| r.selected && r.label == "editor.exe")
+                );
+            }
+            ui.invoke_chart_period_selected(2);
+            ui.set_page_scroll_y(-10_000.0);
+            slint::platform::update_timers_and_animations();
+            save_preview(window, &format!("pie-{theme}-{label}-apps"));
+            ui.invoke_chart_pie_mode_selected(0);
+            for period in 0..4 {
+                ui.invoke_chart_period_selected(period);
+                let (from, to) = analytics::Period::from_index(period)
+                    .range(NaiveDate::from_ymd_opt(2024, 10, 15).unwrap());
+                let expected = db
+                    .lock()
+                    .unwrap()
+                    .history_daily(
+                        &from.to_string(),
+                        &to.to_string(),
+                        Some("C:/Preview/Editor.exe"),
+                    )
+                    .unwrap()
+                    .iter()
+                    .map(|(_, c)| c.total())
+                    .sum::<i64>();
+                assert_eq!(
+                    ui.get_pie_rows()
+                        .iter()
+                        .map(|r| r.value.replace(',', "").parse::<i64>().unwrap())
+                        .sum::<i64>(),
+                    expected,
+                    "composition follows the selected app"
+                );
+            }
+            ui.invoke_chart_period_selected(2);
+            ui.set_page_scroll_y(-10_000.0);
+            slint::platform::update_timers_and_animations();
+            save_preview(window, &format!("pie-{theme}-{label}-selected"));
+            ui.invoke_chart_view_selected(0);
+            ui.invoke_chart_day_selected("2024-02-29".into());
+            assert_eq!(ui.get_trend_period(), 0);
+            assert_eq!(ui.get_trend_points().row_count(), 24);
+            assert_eq!(ui.get_query_date(), "2024-02-29");
+            ui.window()
+                .dispatch_event(slint::platform::WindowEvent::CloseRequested);
+            slint::platform::update_timers_and_animations();
+            assert!(ui.get_close_open());
+            assert!(ui.window().is_visible());
+            save_preview(window, &format!("close-{theme}-{label}"));
+            ui.window()
+                .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                    text: slint::platform::Key::Escape.into(),
+                });
+            ui.window()
+                .dispatch_event(slint::platform::WindowEvent::KeyReleased {
+                    text: slint::platform::Key::Escape.into(),
+                });
+            slint::platform::update_timers_and_animations();
+            assert!(!ui.get_close_open(), "Escape cancels closing");
+            ui.window()
+                .dispatch_event(slint::platform::WindowEvent::CloseRequested);
+            slint::platform::update_timers_and_animations();
+            let (left, top) = ((w - 456.0) / 2.0, (h - 240.0) / 2.0);
+            click(left + 45.0, top + 204.0);
+            assert!(!ui.get_close_open(), "cancel close at {label}");
+            assert!(ui.window().is_visible());
+            ui.window()
+                .dispatch_event(slint::platform::WindowEvent::CloseRequested);
+            slint::platform::update_timers_and_animations();
+            let before = exits.get();
+            click(left + 396.0, top + 204.0);
+            assert_eq!(exits.get(), before + 1, "exit choice at {label}");
+            assert!(
+                ui.window().is_visible(),
+                "test exit callback never terminates the test process"
+            );
+            ui.invoke_close_cancel_clicked();
+            ui.window()
+                .dispatch_event(slint::platform::WindowEvent::CloseRequested);
+            slint::platform::update_timers_and_animations();
+            ui.set_capture_active(false);
+            click(left + 298.0, top + 204.0);
+            assert!(!ui.window().is_visible(), "background choice at {label}");
+            assert!(
+                !ui.get_capture_active(),
+                "background choice preserves pause state"
+            );
+            assert!(
+                ui.get_trend_series()
+                    .iter()
+                    .all(|s| s.source.size().width == 0),
+                "hiding the panel releases chart images"
+            );
+            ui.show().unwrap();
+            ui.set_capture_active(true);
+        }
+    }
+    let mut browser = sample("2024-10-15", Some(12), "C:/browser.exe", "left", 5);
+    browser.code = "total".into();
+    browser.detailed = false;
+    db.lock().unwrap().record(&browser).unwrap();
+    ui.set_date_text("2024-10-15".into());
+    ui.set_query_date("2024-10-15".into());
+    ui.set_trend_period(0);
+    ui.invoke_chart_app_requested();
+    ui.set_chart_app_search("browser".into());
+    slint::platform::update_timers_and_animations();
+    ui.invoke_chart_app_chosen(ui.get_chart_apps().row_data(0).unwrap().path);
+    assert!(
+        ui.get_trend_series()
+            .iter()
+            .skip(2)
+            .all(|s| s.commands.is_empty()),
+        "Totals Only never invents categorized curves"
+    );
+    assert!(
+        ui.get_trend_points()
+            .row_data(12)
+            .unwrap()
+            .description
+            .contains("未记录详细数据")
+    );
+    assert!(ui.get_trend_note().contains("未记录详细数据"));
+    ui.set_page_scroll_y(-10_000.0);
+    slint::platform::update_timers_and_animations();
+    save_preview(window, "activity-totals-only");
+    ui.invoke_chart_view_selected(1);
+    ui.invoke_chart_pie_mode_selected(0);
+    assert_eq!(ui.get_pie_rows().row_data(1).unwrap().value, "5");
+    assert_eq!(ui.get_pie_rows().row_data(1).unwrap().percent, "100.0%");
+    ui.set_page_scroll_y(-10_000.0);
+    slint::platform::update_timers_and_animations();
+    save_preview(window, "pie-totals-only");
+    db.lock()
+        .unwrap()
+        .set_policy("C:/empty.exe", "detailed")
+        .unwrap();
+    ui.invoke_chart_app_requested();
+    ui.set_chart_app_search("empty".into());
+    slint::platform::update_timers_and_animations();
+    ui.invoke_chart_app_chosen(ui.get_chart_apps().row_data(0).unwrap().path);
+    assert!(!ui.get_pie_has_data());
+    assert_eq!(ui.get_pie_source().size().width, 0);
+    assert!(ui.get_pie_rows().iter().all(|r| r.percent == "0.0%"));
+    ui.set_page_scroll_y(-10_000.0);
+    slint::platform::update_timers_and_animations();
+    save_preview(window, "pie-empty");
+    ui.invoke_chart_pie_mode_selected(1);
+    assert!(
+        ui.get_pie_rows()
+            .iter()
+            .any(|r| r.selected && r.label == "empty.exe" && r.value == "0" && r.percent == "0.0%")
+    );
+    assert!(
+        ui.get_pie_has_data(),
+        "global application pie includes other active apps"
+    );
+    ui.invoke_chart_pie_mode_selected(0);
+    db.lock()
+        .unwrap()
+        .record(&sample("2024-10-15", None, "C:/legacy.exe", "key", 10))
+        .unwrap();
+    ui.invoke_chart_app_requested();
+    ui.set_chart_app_search("legacy".into());
+    slint::platform::update_timers_and_animations();
+    ui.invoke_chart_app_chosen(ui.get_chart_apps().row_data(0).unwrap().path);
+    assert!(ui.get_trend_note().contains("10 次未分时"));
+    assert_eq!(ui.get_pie_rows().row_data(0).unwrap().value, "10");
+    assert_eq!(ui.get_pie_rows().row_data(0).unwrap().percent, "100.0%");
+    assert!(
+        ui.get_pie_has_data(),
+        "legacy daily data is still complete in pie charts"
+    );
+    ui.set_page_scroll_y(-10_000.0);
+    slint::platform::update_timers_and_animations();
+    save_preview(window, "pie-legacy");
+    ui.invoke_chart_pie_mode_selected(1);
+    ui.invoke_chart_app_requested();
+    ui.set_chart_app_search("tool0".into());
+    slint::platform::update_timers_and_animations();
+    ui.invoke_chart_app_chosen(ui.get_chart_apps().row_data(0).unwrap().path);
+    assert_eq!(ui.get_pie_rows().row_count(), 8);
+    assert!(
+        ui.get_pie_rows()
+            .iter()
+            .any(|r| r.selected && r.label == "tool0.exe")
+    );
+    ui.set_page_scroll_y(-10_000.0);
+    slint::platform::update_timers_and_animations();
+    let scroll = ui.get_page_scroll_y();
+    ui.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+            position: slint::LogicalPosition::new(450.0, 250.0),
+            delta_x: 0.0,
+            delta_y: -10_000.0,
+        });
+    slint::platform::update_timers_and_animations();
+    assert_eq!(
+        ui.get_page_scroll_y(),
+        scroll,
+        "pie legend scroll does not move the whole page"
+    );
+    save_preview(window, "pie-many-apps");
 }
 
 #[test]
@@ -739,4 +1295,85 @@ fn input_display_labels_keep_physical_keys_distinct() {
     assert_eq!(display_input_code("scan:1d:ext:true"), "Right Ctrl");
     assert_eq!(display_input_code("hwheel_up"), "水平滚轮向右");
     assert_eq!(format_count(12_840), "12,840");
+}
+
+#[test]
+fn exit_waits_for_committed_batch_and_restores_capture_on_failure() {
+    let enabled = AtomicBool::new(true);
+    let (tx, rx) = mpsc::sync_channel(1);
+    let worker = thread::spawn(move || {
+        let WriterCommand::Shutdown(ack) = rx.recv().unwrap() else {
+            panic!("shutdown command")
+        };
+        let mut db = storage::database::Database::open(std::path::Path::new(":memory:")).unwrap();
+        let result = db.record(&storage::history::sample(
+            "2026-10-16",
+            Some(8),
+            "C:/a.exe",
+            "key",
+            13,
+        ));
+        ack.send(result.is_ok()).unwrap();
+        db.totals("2026-10-16").unwrap().0
+    });
+    assert!(exit_handshake(
+        &enabled,
+        &tx,
+        || {
+            assert!(!enabled.load(Ordering::Acquire));
+            true
+        },
+        Duration::from_secs(1)
+    ));
+    assert!(!enabled.load(Ordering::Acquire));
+    assert_eq!(worker.join().unwrap(), 13);
+    let (tx, rx) = mpsc::sync_channel(1);
+    let worker = thread::spawn(move || {
+        let WriterCommand::Shutdown(ack) = rx.recv().unwrap() else {
+            panic!("shutdown")
+        };
+        ack.send(false).unwrap();
+    });
+    enabled.store(true, Ordering::Release);
+    assert!(!exit_handshake(
+        &enabled,
+        &tx,
+        || true,
+        Duration::from_secs(1)
+    ));
+    assert!(enabled.load(Ordering::Acquire));
+    worker.join().unwrap();
+}
+
+#[test]
+fn exit_barrier_queue_and_timeout_failures_preserve_previous_pause_state() {
+    let enabled = AtomicBool::new(true);
+    let (tx, rx) = mpsc::sync_channel(1);
+    assert!(!exit_handshake(
+        &enabled,
+        &tx,
+        || false,
+        Duration::from_millis(1)
+    ));
+    assert!(enabled.load(Ordering::Acquire));
+    assert!(
+        rx.try_recv().is_err(),
+        "failed collector barrier never requests exit Flush"
+    );
+    enabled.store(false, Ordering::Release);
+    assert!(!exit_handshake(
+        &enabled,
+        &tx,
+        || true,
+        Duration::from_millis(1)
+    ));
+    assert!(
+        !enabled.load(Ordering::Acquire),
+        "timeout preserves a previously paused collector"
+    );
+    assert!(
+        !exit_handshake(&enabled, &tx, || true, Duration::from_millis(1)),
+        "full bounded command queue prevents exit"
+    );
+    assert!(!enabled.load(Ordering::Acquire));
 }

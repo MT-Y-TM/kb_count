@@ -29,13 +29,23 @@ pub struct AppDetail {
     pub policy: CaptureMode,
 }
 pub struct Database {
-    conn: Connection,
+    pub(super) conn: Connection,
 }
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 fn create_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS applications(id INTEGER PRIMARY KEY, executable_name TEXT NOT NULL, executable_path TEXT NOT NULL UNIQUE, display_name TEXT NOT NULL, first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS daily_input_counts(local_date TEXT NOT NULL, app_id INTEGER NOT NULL, input_type TEXT NOT NULL, input_code TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY(local_date,app_id,input_type,input_code)); CREATE TABLE IF NOT EXISTS daily_app_totals(local_date TEXT NOT NULL, app_id INTEGER NOT NULL, keyboard_count INTEGER NOT NULL DEFAULT 0, mouse_click_count INTEGER NOT NULL DEFAULT 0, wheel_units INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(local_date,app_id)); CREATE TABLE IF NOT EXISTS app_policies(app_id INTEGER PRIMARY KEY, capture_mode TEXT NOT NULL DEFAULT 'detailed'); CREATE INDEX IF NOT EXISTS idx_daily_input_date ON daily_input_counts(local_date); CREATE INDEX IF NOT EXISTS idx_daily_input_lookup ON daily_input_counts(local_date,input_type,app_id); CREATE INDEX IF NOT EXISTS idx_daily_totals_date ON daily_app_totals(local_date);",
+    )?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS hourly_app_totals(
+          local_date TEXT NOT NULL, local_hour INTEGER NOT NULL CHECK(local_hour BETWEEN 0 AND 23),
+          app_id INTEGER NOT NULL, keyboard_count INTEGER NOT NULL DEFAULT 0,
+          mouse_click_count INTEGER NOT NULL DEFAULT 0, wheel_units INTEGER NOT NULL DEFAULT 0,
+          mouse_left INTEGER NOT NULL DEFAULT 0, mouse_right INTEGER NOT NULL DEFAULT 0,
+          wheel_up INTEGER NOT NULL DEFAULT 0, wheel_down INTEGER NOT NULL DEFAULT 0,
+          classified_units INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY(local_date,local_hour,app_id));",
     )?;
     Ok(())
 }
@@ -47,19 +57,25 @@ fn migrate(conn: &Connection) -> Result<()> {
             "stats.db schema version {version} is newer than this kb_count version {SCHEMA_VERSION}"
         );
     }
-    if version == 0 {
+    // Schema and version change atomically. Legacy daily data has no invented
+    // hourly distribution; only newly captured aggregates populate that table.
+    conn.execute_batch("BEGIN IMMEDIATE;")?;
+    let result = (|| -> Result<()> {
         create_schema(conn)?;
-        conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-    } else {
-        // Keep indexes present when opening a database created by an older 1.x build.
-        create_schema(conn)?;
-    }
-    // Older development builds used a separate `wheel` input type. Merge
-    // those aggregate rows into the schema's mouse category while preserving
-    // any rows already written by the current version.
-    conn.execute_batch(
+        // Older development builds used a separate `wheel` input type. Merge
+        // those aggregate rows into the schema's mouse category while preserving
+        // any rows already written by the current version.
+        conn.execute_batch(
         "INSERT INTO daily_input_counts(local_date,app_id,input_type,input_code,count) SELECT local_date,app_id,'mouse',input_code,count FROM daily_input_counts WHERE input_type='wheel' ON CONFLICT(local_date,app_id,input_type,input_code) DO UPDATE SET count=count+excluded.count; DELETE FROM daily_input_counts WHERE input_type='wheel';",
     )?;
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        Ok(())
+    })();
+    if let Err(error) = result {
+        let _ = conn.execute_batch("ROLLBACK;");
+        return Err(error);
+    }
+    conn.execute_batch("COMMIT;")?;
     Ok(())
 }
 impl Database {
@@ -118,6 +134,30 @@ impl Database {
                 tx.execute("INSERT INTO daily_input_counts VALUES (?1,?2,?3,?4,?5) ON CONFLICT(local_date,app_id,input_type,input_code) DO UPDATE SET count=count+excluded.count",params![event.local_date,id,event.input_type,event.code,event.count])?;
             }
             tx.execute("INSERT INTO daily_app_totals(local_date,app_id,keyboard_count,mouse_click_count,wheel_units) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(local_date,app_id) DO UPDATE SET keyboard_count=keyboard_count+excluded.keyboard_count,mouse_click_count=mouse_click_count+excluded.mouse_click_count,wheel_units=wheel_units+excluded.wheel_units",params![event.local_date,id,event.keyboard_count,event.mouse_count,event.wheel_units])?;
+            if let Some(hour) = event.local_hour {
+                let category = |code: &str| {
+                    if event.detailed && event.code == code {
+                        event.count
+                    } else {
+                        0
+                    }
+                };
+                let classified = if event.detailed {
+                    event.mouse_count + event.wheel_units.abs()
+                } else {
+                    0
+                };
+                tx.execute("INSERT INTO hourly_app_totals VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
+                    ON CONFLICT(local_date,local_hour,app_id) DO UPDATE SET
+                    keyboard_count=keyboard_count+excluded.keyboard_count,
+                    mouse_click_count=mouse_click_count+excluded.mouse_click_count,
+                    wheel_units=wheel_units+excluded.wheel_units,
+                    mouse_left=mouse_left+excluded.mouse_left,mouse_right=mouse_right+excluded.mouse_right,
+                    wheel_up=wheel_up+excluded.wheel_up,wheel_down=wheel_down+excluded.wheel_down,
+                    classified_units=classified_units+excluded.classified_units",
+                    params![event.local_date,hour,id,event.keyboard_count,event.mouse_count,event.wheel_units,
+                        category("left"),category("right"),category("wheel_up"),category("wheel_down"),classified])?;
+            }
         }
         tx.commit()?;
         Ok(())
@@ -289,7 +329,7 @@ impl Database {
         let tx = self.conn.transaction()?;
         // Clearing statistics must not discard application identities or the
         // privacy policies the user configured for them.
-        tx.execute_batch("DELETE FROM daily_input_counts; DELETE FROM daily_app_totals;")?;
+        tx.execute_batch("DELETE FROM daily_input_counts; DELETE FROM daily_app_totals; DELETE FROM hourly_app_totals;")?;
         tx.commit()?;
         Ok(())
     }
@@ -300,7 +340,7 @@ mod tests {
     use crate::stats::aggregator::Aggregator;
 
     #[test]
-    fn schema_migration_initializes_version_one() {
+    fn schema_migration_initializes_current_version() {
         let conn = Connection::open_in_memory().expect("connection");
         migrate(&conn).expect("migration");
         let version: i64 = conn
@@ -361,6 +401,7 @@ mod tests {
         let mut db = Database::open(Path::new(":memory:")).expect("database");
         db.record(&InputEvent {
             local_date: "2026-10-11".into(),
+            local_hour: None,
             app_name: "browser.exe".into(),
             app_path: "browser.exe".into(),
             input_type: "keyboard".into(),
@@ -393,6 +434,7 @@ mod tests {
         let mut db = Database::open(Path::new(":memory:")).expect("database");
         db.record(&InputEvent {
             local_date: "2026-10-11".into(),
+            local_hour: None,
             app_name: "editor.exe".into(),
             app_path: "C:/Apps/editor.exe".into(),
             input_type: "keyboard".into(),
@@ -422,6 +464,7 @@ mod tests {
         let events = [
             InputEvent {
                 local_date: "2026-10-11".into(),
+                local_hour: None,
                 app_name: "editor.exe".into(),
                 app_path: "C:/Apps/editor.exe".into(),
                 input_type: "keyboard".into(),
@@ -434,6 +477,7 @@ mod tests {
             },
             InputEvent {
                 local_date: "2026-10-11".into(),
+                local_hour: None,
                 app_name: "editor.exe".into(),
                 app_path: "C:/Apps/editor.exe".into(),
                 input_type: "mouse".into(),
@@ -446,6 +490,7 @@ mod tests {
             },
             InputEvent {
                 local_date: "2026-10-11".into(),
+                local_hour: None,
                 app_name: "editor.exe".into(),
                 app_path: "C:/Apps/editor.exe".into(),
                 input_type: "mouse".into(),
@@ -478,6 +523,7 @@ mod tests {
             aggregator.record(
                 InputEvent {
                     local_date: "2026-10-15".into(),
+                    local_hour: None,
                     app_name: "Unknown".into(),
                     app_path: "Unknown".into(),
                     input_type: "mouse".into(),
@@ -495,6 +541,7 @@ mod tests {
             aggregator.record(
                 InputEvent {
                     local_date: "2026-10-15".into(),
+                    local_hour: None,
                     app_name: "Unknown".into(),
                     app_path: "Unknown".into(),
                     input_type: "mouse".into(),
@@ -534,6 +581,7 @@ mod tests {
             .expect("legacy app");
         db.record(&InputEvent {
             local_date: "2026-10-11".into(),
+            local_hour: None,
             app_name: "editor.exe".into(),
             app_path: "c:/apps/editor.exe".into(),
             input_type: "keyboard".into(),

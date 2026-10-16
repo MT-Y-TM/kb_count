@@ -12,11 +12,23 @@ pub fn start(enabled: Arc<AtomicBool>) -> Receiver<InputEvent> {
         .expect("unable to start collector");
     rx
 }
+// Called after capture is paused. A synchronous message is a barrier after the
+// collector's current callback, so its final queued aggregates precede Flush.
+pub fn settle() -> bool {
+    #[cfg(windows)]
+    {
+        raw_input::settle()
+    }
+    #[cfg(not(windows))]
+    {
+        true
+    }
+}
 
 #[cfg(windows)]
 mod raw_input {
     use super::*;
-    use chrono::Local;
+    use chrono::{Local, Timelike};
     use std::collections::{HashMap, HashSet};
     use std::sync::{
         Mutex, OnceLock,
@@ -46,6 +58,26 @@ mod raw_input {
     use windows::core::{PWSTR, w};
     type ProcessCacheEntry = (String, String, Instant);
     static SENDER: OnceLock<SyncSender<InputEvent>> = OnceLock::new();
+    static INPUT_WINDOW: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+    pub fn settle() -> bool {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            SMTO_ABORTIFHUNG, SendMessageTimeoutW, WM_NULL,
+        };
+        let handle = INPUT_WINDOW.load(Ordering::Acquire);
+        handle == 0
+            || unsafe {
+                SendMessageTimeoutW(
+                    HWND(handle as *mut _),
+                    WM_NULL,
+                    WPARAM(0),
+                    LPARAM(0),
+                    SMTO_ABORTIFHUNG,
+                    500,
+                    None,
+                )
+                .0 != 0
+            }
+    }
     static CAPTURE_ENABLED: OnceLock<Arc<AtomicBool>> = OnceLock::new();
     static PROCESS_CACHE: OnceLock<Mutex<HashMap<u32, ProcessCacheEntry>>> = OnceLock::new();
     static PRESSED_KEYS: OnceLock<Mutex<HashSet<u32>>> = OnceLock::new();
@@ -116,6 +148,7 @@ mod raw_input {
             if hwnd.0.is_null() {
                 return;
             }
+            INPUT_WINDOW.store(hwnd.0 as isize, Ordering::Release);
             let mouse_device = RAWINPUTDEVICE {
                 usUsagePage: 0x01,
                 usUsage: 0x02,
@@ -184,6 +217,7 @@ mod raw_input {
                 let _ = UnhookWindowsHookEx(keyboard_hook);
             }
             log_diagnostics(hwnd);
+            INPUT_WINDOW.store(0, Ordering::Release);
         }
     }
 
@@ -205,7 +239,7 @@ mod raw_input {
                 }
                 let (app_name, app_path) = foreground_process();
                 emit_event(
-                    Local::now().format("%Y-%m-%d").to_string(),
+                    Local::now(),
                     app_name,
                     app_path,
                     "keyboard",
@@ -388,7 +422,7 @@ mod raw_input {
     }
     #[allow(clippy::too_many_arguments)]
     fn emit_event(
-        date: String,
+        date: chrono::DateTime<Local>,
         app_name: String,
         app_path: String,
         input_type: &str,
@@ -411,7 +445,8 @@ mod raw_input {
                 tracing::info!(input_type, "first input event received");
             }
             let result = sender.try_send(InputEvent {
-                local_date: date,
+                local_date: date.format("%Y-%m-%d").to_string(),
+                local_hour: Some(date.hour() as u8),
                 app_name,
                 app_path,
                 input_type: input_type.into(),
@@ -538,7 +573,7 @@ mod raw_input {
             if !USE_RAW_KEYBOARD.load(Ordering::Acquire) {
                 return;
             }
-            let date = Local::now().format("%Y-%m-%d").to_string();
+            let date = Local::now();
             let k = raw.data.keyboard;
             let key_id =
                 (u32::from(k.MakeCode) << 1) | u32::from(k.Flags & (RI_KEY_E0 | RI_KEY_E1) != 0);
@@ -590,7 +625,7 @@ mod raw_input {
         if flags & MOUSE_COUNTED_FLAGS == 0 {
             return;
         }
-        let date = Local::now().format("%Y-%m-%d").to_string();
+        let date = Local::now();
         let (app_name, app_path) = point_process();
         if app_path == "Unknown" {
             MOUSE_UNKNOWN_ATTRIBUTION.fetch_add(1, Ordering::Relaxed);
@@ -600,7 +635,7 @@ mod raw_input {
         }
         for code in mouse_button_codes(flags) {
             emit_event(
-                date.clone(),
+                date,
                 app_name.clone(),
                 app_path.clone(),
                 "mouse",
@@ -621,7 +656,7 @@ mod raw_input {
                 let units = normalize_wheel(&app_path, horizontal, delta);
                 if units != 0 {
                     emit_event(
-                        date.clone(),
+                        date,
                         app_name.clone(),
                         app_path.clone(),
                         "mouse",

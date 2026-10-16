@@ -2,8 +2,54 @@ import { LineEdit, ScrollView, ListView, Palette } from "std-widgets.slint";
 import { AppRow, InputRow, HeatCell, ActionButton, NavItem, MetricCard, AppListRow, InputList, HeatKey, AppIcon } from "components.slint";
 import { DatePicker, CalendarDay } from "date_picker.slint";
 export { CalendarDay }
+import { ActivityPage, AppPicker, ActivityCell, TrendSeries, TrendPoint, TrendTick, ChartApp, PieRow } from "activity.slint";
+export { ActivityCell, TrendSeries, TrendPoint, TrendTick, ChartApp, PieRow }
+import { CloseDialog } from "close_dialog.slint";
 
 export component MainWindow inherits Window {
+    in-out property <bool> close_open;
+    in-out property <int> chart_view;
+    in-out property <int> pie_mode;
+    in property <[PieRow]> pie_rows;
+    in property <image> pie_source;
+    in property <bool> pie_has_data;
+    in property <string> pie_total;
+    in property <string> pie_range;
+    in property <string> pie_scope;
+    callback chart_view_selected(int);
+    callback chart_pie_mode_selected(int);
+    in-out property <bool> close_busy;
+    in-out property <string> close_error;
+    callback close_hide_clicked();
+    callback close_cancel_clicked();
+    callback exit_requested();
+    in property <[ActivityCell]> activity_cells;
+    in property <[TrendSeries]> trend_series;
+    in property <[TrendPoint]> trend_points;
+    in property <[TrendTick]> trend_ticks;
+    in property <[ChartApp]> chart_apps;
+    in property <string> activity_year;
+    in property <string> activity_summary;
+    in property <int> activity_columns: 53;
+    in property <string> trend_summary;
+    in property <string> trend_range;
+    in property <string> trend_note;
+    in property <string> trend_maximum;
+    in property <string> trend_middle;
+    in-out property <int> trend_period;
+    in-out property <string> trend_app_path;
+    in-out property <string> trend_app_name: "全部应用";
+    in-out property <bool> app_picker_open;
+    in-out property <string> chart_app_search;
+    callback charts_requested();
+    callback chart_period_selected(int);
+    callback chart_year_shift(int);
+    callback chart_day_selected(string);
+    callback chart_series_toggled(int);
+    callback chart_app_requested();
+    callback chart_all_apps_selected();
+    callback chart_app_chosen(string);
+    callback chart_app_search_changed();
     in property <string> status_text;
     in property <string> date_text;
     in property <string> keyboard_text;
@@ -145,9 +191,11 @@ export component MainWindow inherits Window {
     callback heatmap_app_clicked();
     callback clear_cancel_clicked();
     in-out property <bool> compact_layout;
+    in-out property <bool> short_charts;
     property <bool> narrow;
     function adapt-layout() {
         root.compact_layout = root.width < 1000px || root.height < 650px;
+        root.short_charts = root.height < 500px;
         root.narrow = root.width < 960px;
     }
     changed width => { root.adapt-layout(); }
@@ -161,8 +209,11 @@ export component MainWindow inherits Window {
     changed selected_page => {
         root.page_scroll_y = 0px;
         root.calendar_open = false;
+        root.app_picker_open = false;
+        if root.selected_page == 4 { root.charts_requested(); }
         if root.selected_page != 3 { root.clear_cancel_clicked(); }
     }
+    changed chart_app_search => { root.chart_app_search_changed(); }
     init => { Palette.color-scheme = root.dark_mode ? ColorScheme.dark : ColorScheme.light; }
 
     title: "kb_count";
@@ -189,6 +240,7 @@ export component MainWindow inherits Window {
                 NavItem { compact: root.narrow; index: "02"; label: "键位分布"; dark: root.dark_mode; selected: root.selected_page == 1; activated => { root.selected_page = 1; } }
                 NavItem { compact: root.narrow; index: "03"; label: "应用详情"; dark: root.dark_mode; selected: root.selected_page == 2; activated => { root.selected_page = 2; } }
                 NavItem { compact: root.narrow; index: "04"; label: "设置与数据"; dark: root.dark_mode; selected: root.selected_page == 3; activated => { root.selected_page = 3; } }
+                NavItem { height: root.compact_layout ? 32px : 46px; compact: root.narrow; index: "05"; label: "活动趋势"; dark: root.dark_mode; selected: root.selected_page == 4; activated => { root.selected_page = 4; } }
                 Rectangle { vertical-stretch: 1; }
                 Rectangle { height: 1px; background: root.line; }
                 Text { text: "仅在本地保存"; color: root.muted; font-size: 12px; }
@@ -202,8 +254,8 @@ export component MainWindow inherits Window {
                 height: root.compact_layout ? 38px : 50px; spacing: 12px;
                 VerticalLayout {
                     spacing: 5px;
-                    Text { text: root.selected_page == 0 ? "输入总览" : root.selected_page == 1 ? "键位分布" : root.selected_page == 2 ? "应用详情" : "设置与数据"; font-size: root.compact_layout ? 22px : 25px; font-weight: 600; color: root.ink; }
-                    if !root.compact_layout: Text { text: root.selected_page == 0 ? "查看每天的输入量与应用使用分布" : root.selected_page == 1 ? "按物理键位查看使用频率" : root.selected_page == 2 ? "深入了解单个应用的输入统计" : "管理采集方式、外观与本地数据"; font-size: 12px; color: root.muted; }
+                    Text { text: root.selected_page == 0 ? "输入总览" : root.selected_page == 1 ? "键位分布" : root.selected_page == 2 ? "应用详情" : root.selected_page == 4 ? "活动趋势" : "设置与数据"; font-size: root.compact_layout ? 22px : 25px; font-weight: 600; color: root.ink; }
+                    if !root.compact_layout: Text { text: root.selected_page == 0 ? "查看每天的输入量与应用使用分布" : root.selected_page == 1 ? "按物理键位查看使用频率" : root.selected_page == 2 ? "深入了解单个应用的输入统计" : root.selected_page == 4 ? "年度活动与日、周、月、年输入趋势" : "管理采集方式、外观与本地数据"; font-size: 12px; color: root.muted; }
                 }
                 Rectangle { horizontal-stretch: 1; }
                 Rectangle {
@@ -232,6 +284,27 @@ export component MainWindow inherits Window {
             }
             Rectangle {
                 vertical-stretch: 1;
+                if root.selected_page == 4: ActivityPage {
+                    width: 100%; height: 100%; dark: root.dark_mode;
+                    short_plot: root.short_charts;
+                    view: root.chart_view; pie_mode: root.pie_mode;
+                    pie_rows: root.pie_rows; pie_source: root.pie_source; pie_has_data: root.pie_has_data;
+                    pie_total: root.pie_total; pie_range: root.pie_range; pie_scope: root.pie_scope;
+                    view-selected(index) => { root.chart_view_selected(index); }
+                    pie-mode-selected(index) => { root.chart_pie_mode_selected(index); }
+                    year: root.activity_year; annual_summary: root.activity_summary;
+                    summary: root.trend_summary; range: root.trend_range; note: root.trend_note;
+                    app_name: root.trend_app_name; app_selected: root.trend_app_path != "";
+                    period: root.trend_period; cells: root.activity_cells; columns: root.activity_columns;
+                    series: root.trend_series; points: root.trend_points; ticks: root.trend_ticks;
+                    maximum: root.trend_maximum; middle: root.trend_middle; scroll_y <=> root.page_scroll_y;
+                    period-selected(index) => { root.chart_period_selected(index); }
+                    app-requested => { root.chart_app_requested(); }
+                    all-apps-selected => { root.chart_all_apps_selected(); }
+                    year-shift(delta) => { root.chart_year_shift(delta); }
+                    day-selected(date) => { root.chart_day_selected(date); }
+                    series-toggled(index) => { root.chart_series_toggled(index); }
+                }
                 if root.selected_page == 0: VerticalLayout {
                     spacing: root.compact_layout ? 10px : 18px;
                     HorizontalLayout { spacing: 12px;
@@ -428,7 +501,7 @@ export component MainWindow inherits Window {
             HorizontalLayout { height: root.selected_page == 0 ? 20px : 32px; spacing: 8px;
                 Text { text: root.status_text; color: root.muted; font-size: 11px; overflow: elide; }
                 Rectangle { horizontal-stretch: 1; }
-                Text { text: "关闭面板后继续在托盘统计"; color: root.muted; font-size: 11px; }
+                Text { text: "关闭时可选择后台运行或退出"; color: root.muted; font-size: 11px; }
                 if root.selected_page != 0 && root.page_scroll_y < -64px: ActionButton { text: "回到顶部"; clicked => { root.page_scroll_y = 0px; } }
             }
         }
@@ -448,6 +521,27 @@ export component MainWindow inherits Window {
             chosen(date) => { root.calendar_chosen(date); }
             quick-chosen(offset) => { root.calendar_quick_chosen(offset); }
             dismissed => { root.calendar_open = false; }
+        }
+    }
+    Rectangle {
+        width: 100%; height: 100%; visible: root.app_picker_open; background: #101b2c88;
+        TouchArea { clicked => { root.app_picker_open = false; } scroll-event => { return accept; } }
+        AppPicker {
+            x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+            active: root.app_picker_open; dark: root.dark_mode; search <=> root.chart_app_search; apps: root.chart_apps;
+            chosen(path) => { root.chart_app_chosen(path); }
+            dismissed => { root.app_picker_open = false; }
+        }
+    }
+    Rectangle {
+        width: 100%; height: 100%; visible: root.close_open; background: #101b2c88;
+        TouchArea { scroll-event => { return accept; } }
+        CloseDialog {
+            x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+            dark: root.dark_mode; active: root.close_open; busy: root.close_busy; error: root.close_error;
+            hide-panel => { root.close_hide_clicked(); }
+            canceled => { root.close_cancel_clicked(); }
+            exit-app => { root.exit_requested(); }
         }
     }
 }
