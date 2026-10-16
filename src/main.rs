@@ -52,7 +52,9 @@ fn exit_handshake(
     timeout: Duration,
 ) -> bool {
     let previous = enabled.swap(false, Ordering::AcqRel);
-    let (ack_tx, ack_rx) = mpsc::sync_channel(1);
+    // Rendezvous: a successful send proves the exit caller received the ACK.
+    // With a buffered ACK, it could time out and resume after the writer stops.
+    let (ack_tx, ack_rx) = mpsc::sync_channel(0);
     let saved = settle()
         && commands.try_send(WriterCommand::Shutdown(ack_tx)).is_ok()
         && ack_rx.recv_timeout(timeout).unwrap_or(false);
@@ -60,6 +62,10 @@ fn exit_handshake(
         enabled.store(previous, Ordering::Release);
     }
     saved
+}
+
+fn acknowledge_exit(ack: mpsc::SyncSender<bool>, saved: bool) -> bool {
+    ack.send(saved).is_ok() && saved
 }
 
 fn heat_count(rows: &[storage::database::KeyTotal], scan_code: &str) -> i32 {
@@ -767,9 +773,10 @@ fn run() -> anyhow::Result<()> {
                 match writer_command_rx.recv_timeout(Duration::from_secs(flush_seconds)) {
                     Ok(WriterCommand::Shutdown(ack)) => {
                         flush(&events, &db_writer, &mut pending);
-                        let _ = ack.send(pending.is_empty());
-                        // Keep retrying on failure or timeout; the event loop
-                        // drops the command sender only after successful exit.
+                        // Other UI callbacks retain command sender clones. Stop
+                        // explicitly after a received successful rendezvous ACK;
+                        // a failed write or abandoned exit keeps the writer alive.
+                        if acknowledge_exit(ack, pending.is_empty()) { break; }
                     }
                     Ok(WriterCommand::Clear(ack)) => {
                         while events.try_recv().is_ok() {}

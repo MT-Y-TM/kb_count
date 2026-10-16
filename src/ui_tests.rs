@@ -1377,3 +1377,31 @@ fn exit_barrier_queue_and_timeout_failures_preserve_previous_pause_state() {
     );
     assert!(!enabled.load(Ordering::Acquire));
 }
+
+#[test]
+fn writer_stops_only_after_exit_ack_is_received_successfully() {
+    let (tx, rx) = mpsc::sync_channel(0);
+    let worker = thread::spawn(move || acknowledge_exit(tx, true));
+    assert!(
+        !worker.is_finished(),
+        "rendezvous cannot stop the writer before the caller receives"
+    );
+    assert!(rx.recv_timeout(Duration::from_secs(1)).unwrap());
+    assert!(
+        worker.join().unwrap(),
+        "received successful save allows the writer loop to break"
+    );
+    let (tx, rx) = mpsc::sync_channel(0);
+    drop(rx);
+    assert!(
+        !acknowledge_exit(tx, true),
+        "a timed-out exit must not stop a successfully flushed writer"
+    );
+    let (tx, rx) = mpsc::sync_channel(0);
+    let worker = thread::spawn(move || acknowledge_exit(tx, false));
+    assert!(!rx.recv_timeout(Duration::from_secs(1)).unwrap());
+    assert!(
+        !worker.join().unwrap(),
+        "failed save keeps the writer available for retry"
+    );
+}
