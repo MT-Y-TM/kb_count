@@ -1,0 +1,86 @@
+import { ActionButton } from "components.slint";
+
+export struct CalendarDay {
+    label: string,
+    date: string,
+    in_month: bool,
+    selected: bool,
+    today: bool,
+}
+
+// Render in the existing window, including at the 820 × 440 logical minimum.
+export component DatePicker inherits Rectangle {
+    in property <bool> active;
+    in property <bool> dark;
+    in property <string> caption;
+    in property <string> month;
+    in property <string> selection;
+    in property <[CalendarDay]> days;
+    callback month-shift(int);
+    callback day-shift(int);
+    callback chosen(string);
+    callback quick-chosen(int);
+    callback dismissed();
+    width: 352px; height: 392px;
+    border-radius: 12px;
+    background: dark ? #1c2636 : #ffffff;
+    border-width: 1px; border-color: dark ? #495975 : #c5d0e1;
+    property <color> ink: dark ? #e8effb : #27364f;
+    property <color> muted: dark ? #aab9d0 : #5f708a;
+    forward-focus: keyboard;
+    changed active => { if root.active { keyboard.focus(); } }
+    // Consume clicks inside the card so they cannot dismiss it via the scrim.
+    TouchArea { scroll-event => { return accept; } }
+    keyboard := FocusScope {
+        width: 100%; height: 100%;
+        key-pressed(event) => {
+            if event.text == Key.Escape { root.dismissed(); return accept; }
+            if event.text == Key.Return || event.text == " " { root.chosen(root.selection); return accept; }
+            if event.text == Key.LeftArrow { root.day-shift(-1); return accept; }
+            if event.text == Key.RightArrow { root.day-shift(1); return accept; }
+            if event.text == Key.UpArrow { root.day-shift(-7); return accept; }
+            if event.text == Key.DownArrow { root.day-shift(7); return accept; }
+            if event.text == Key.PageUp { root.month-shift(-1); return accept; }
+            if event.text == Key.PageDown { root.month-shift(1); return accept; }
+            // Keep keyboard focus inside the calendar; Tab moves one date.
+            if event.text == Key.Tab { root.day-shift(event.modifiers.shift ? -1 : 1); keyboard.focus(); return accept; }
+            return accept;
+        }
+        Text { x: 16px; y: 16px; width: 320px; height: 22px; text: root.caption; color: root.ink; font-size: 16px; font-weight: 600; }
+        HorizontalLayout {
+            x: 16px; y: 48px; width: 320px; height: 32px; spacing: 4px;
+            ActionButton { width: 32px; text: "«"; accessible-label: "上一年"; clicked => { root.month-shift(-12); keyboard.focus(); } }
+            ActionButton { width: 32px; text: "‹"; accessible-label: "上个月"; clicked => { root.month-shift(-1); keyboard.focus(); } }
+            Text { text: root.month; color: root.ink; horizontal-alignment: center; vertical-alignment: center; font-size: 14px; font-weight: 600; }
+            ActionButton { width: 32px; text: "›"; accessible-label: "下个月"; clicked => { root.month-shift(1); keyboard.focus(); } }
+            ActionButton { width: 32px; text: "»"; accessible-label: "下一年"; clicked => { root.month-shift(12); keyboard.focus(); } }
+        }
+        for weekday[index] in ["一", "二", "三", "四", "五", "六", "日"]: Text {
+            x: 16px + index * (320px / 7); y: 88px; width: 320px / 7; height: 22px;
+            text: weekday; horizontal-alignment: center; vertical-alignment: center;
+            color: root.muted; font-size: 12px;
+        }
+        for day[index] in root.days: Rectangle {
+            x: 16px + Math.mod(index, 7) * (320px / 7); y: 110px + floor(index / 7) * 36px;
+            width: 320px / 7 - 2px; height: 34px;
+            border-radius: 6px;
+            background: day.selected ? (root.dark ? #4274cc : #315fb4) : touch.has-hover ? (root.dark ? #304465 : #e9f0ff) : transparent;
+            border-width: day.today ? 1px : 0px; border-color: root.dark ? #9abfff : #315fb4;
+            accessible-role: button; accessible-label: day.date;
+            accessible-enabled: day.date != "";
+            accessible-checkable: true; accessible-checked: day.selected;
+            accessible-action-default => { root.chosen(day.date); }
+            Text { text: day.label; horizontal-alignment: center; vertical-alignment: center;
+                color: day.selected ? #ffffff : day.in_month ? root.ink : (root.dark ? #8190a8 : #63748e);
+                font-size: 14px; font-weight: day.today || day.selected ? 600 : 400; }
+            touch := TouchArea { enabled: day.date != ""; mouse-cursor: pointer; clicked => { root.chosen(day.date); } }
+        }
+        HorizontalLayout {
+            x: 16px; y: 344px; width: 320px; height: 32px; spacing: 8px;
+            ActionButton { text: "今天"; clicked => { root.quick-chosen(0); } }
+            ActionButton { text: "昨天"; clicked => { root.quick-chosen(-1); } }
+            Rectangle { horizontal-stretch: 1; }
+            ActionButton { text: "取消"; clicked => { root.dismissed(); } }
+        }
+    }
+}

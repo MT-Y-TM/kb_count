@@ -1,5 +1,7 @@
 import { LineEdit, ScrollView, ListView, Palette } from "std-widgets.slint";
 import { AppRow, InputRow, HeatCell, ActionButton, NavItem, MetricCard, AppListRow, InputList, HeatKey, AppIcon } from "components.slint";
+import { DatePicker, CalendarDay } from "date_picker.slint";
+export { CalendarDay }
 
 export component MainWindow inherits Window {
     in property <string> status_text;
@@ -76,6 +78,16 @@ export component MainWindow inherits Window {
     in property <int> heat_right_alt;
     in property <int> heat_space;
     in-out property <string> query_date;
+    in-out property <bool> calendar_open;
+    in property <string> calendar_month;
+    in property <string> calendar_caption;
+    in property <string> calendar_selection;
+    in property <[CalendarDay]> calendar_days;
+    callback calendar_requested(int);
+    callback calendar_month_shift(int);
+    callback calendar_day_shift(int);
+    callback calendar_chosen(string);
+    callback calendar_quick_chosen(int);
     in-out property <string> detail_path;
     in-out property <string> app_query_path;
     in-out property <string> policy_path;
@@ -148,6 +160,7 @@ export component MainWindow inherits Window {
     changed app_search => { root.app_search_changed(); }
     changed selected_page => {
         root.page_scroll_y = 0px;
+        root.calendar_open = false;
         if root.selected_page != 3 { root.clear_cancel_clicked(); }
     }
     init => { Palette.color-scheme = root.dark_mode ? ColorScheme.dark : ColorScheme.light; }
@@ -210,8 +223,9 @@ export component MainWindow inherits Window {
                     ActionButton { text: "今日"; clicked => { root.today_clicked(); } }
                     ActionButton { text: "昨日"; clicked => { root.yesterday_clicked(); } }
                     Rectangle { width: 1px; background: root.line; }
-                    LineEdit { width: 124px; text <=> root.query_date; placeholder-text: "YYYY-MM-DD"; accepted => { root.query_clicked(); } }
+                    LineEdit { width: 124px; text <=> root.query_date; accessible-label: "统计日期，YYYY-MM-DD"; placeholder-text: "YYYY-MM-DD"; accepted => { root.query_clicked(); } }
                     ActionButton { text: "查询"; clicked => { root.query_clicked(); } }
+                    ActionButton { text: "选日期"; clicked => { root.calendar_requested(0); } }
                     Rectangle { horizontal-stretch: 1; }
                     Text { text: root.date_text; color: root.muted; font-size: 12px; vertical-alignment: center; }
                 }
@@ -383,9 +397,11 @@ export component MainWindow inherits Window {
                                 Text { text: "数据导出"; font-size: 16px; font-weight: 600; color: root.ink; }
                                 Text { text: "导出选定日期范围的聚合统计，保存位置由你选择。"; color: root.muted; font-size: 12px; }
                                 HorizontalLayout { spacing: 8px;
-                                    LineEdit { text <=> root.export_from_date; placeholder-text: "开始 YYYY-MM-DD"; }
+                                    LineEdit { text <=> root.export_from_date; accessible-label: "导出开始日期，YYYY-MM-DD"; placeholder-text: "开始 YYYY-MM-DD"; }
+                                    ActionButton { text: "选择"; accessible-label: "选择导出开始日期"; clicked => { root.calendar_requested(1); } }
                                     Text { text: "至"; color: root.muted; vertical-alignment: center; }
-                                    LineEdit { text <=> root.export_to_date; placeholder-text: "结束 YYYY-MM-DD"; }
+                                    LineEdit { text <=> root.export_to_date; accessible-label: "导出结束日期，YYYY-MM-DD"; placeholder-text: "结束 YYYY-MM-DD"; }
+                                    ActionButton { text: "选择"; accessible-label: "选择导出结束日期"; clicked => { root.calendar_requested(2); } }
                                     ActionButton { text: "导出 CSV"; clicked => { root.export_clicked(); } }
                                 }
                                 Text { text: root.export_text; color: root.muted; font-size: 12px; wrap: word-wrap; }
@@ -415,6 +431,23 @@ export component MainWindow inherits Window {
                 Text { text: "关闭面板后继续在托盘统计"; color: root.muted; font-size: 11px; }
                 if root.selected_page != 0 && root.page_scroll_y < -64px: ActionButton { text: "回到顶部"; clicked => { root.page_scroll_y = 0px; } }
             }
+        }
+    }
+    Rectangle {
+        width: 100%; height: 100%;
+        visible: root.calendar_open;
+        background: #101b2c88;
+        TouchArea { clicked => { root.calendar_open = false; } scroll-event => { return accept; } }
+        DatePicker {
+            active: root.calendar_open;
+            x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+            dark: root.dark_mode; caption: root.calendar_caption; month: root.calendar_month;
+            selection: root.calendar_selection; days: root.calendar_days;
+            month-shift(delta) => { root.calendar_month_shift(delta); }
+            day-shift(delta) => { root.calendar_day_shift(delta); }
+            chosen(date) => { root.calendar_chosen(date); }
+            quick-chosen(offset) => { root.calendar_quick_chosen(offset); }
+            dismissed => { root.calendar_open = false; }
         }
     }
 }

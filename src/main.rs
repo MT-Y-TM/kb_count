@@ -2,6 +2,7 @@
 mod app_icons;
 mod collector;
 mod config;
+mod date_picker;
 mod stats;
 mod storage;
 mod tray;
@@ -387,6 +388,7 @@ fn bind_panel_close(ui: &MainWindow) {
     let weak = ui.as_weak();
     ui.window().on_close_requested(move || {
         if let Some(ui) = weak.upgrade() {
+            ui.set_calendar_open(false);
             ui.invoke_clear_cancel_clicked();
         }
         CloseRequestResponse::HideWindow
@@ -659,6 +661,7 @@ fn run() -> anyhow::Result<()> {
     let ui = MainWindow::new()?;
     bind_app_search(&ui);
     bind_panel_close(&ui);
+    date_picker::bind(&ui);
     let enabled = Arc::new(AtomicBool::new(cfg.capture_enabled));
     tray::start(Arc::clone(&enabled));
     let events = collector::start(Arc::clone(&enabled));

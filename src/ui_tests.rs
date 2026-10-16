@@ -90,6 +90,7 @@ fn verify_ui_state() {
     let ui = MainWindow::new().expect("UI");
     bind_app_search(&ui);
     bind_panel_close(&ui);
+    date_picker::bind(&ui);
     window.set_size(slint::PhysicalSize::new(1060, 780));
     let mut db = storage::database::Database::open(std::path::Path::new(":memory:")).unwrap();
     let date = "2026-10-15";
@@ -337,6 +338,109 @@ fn verify_ui_state() {
         let before = queries.get();
         click(content_x + 288.0, if compact { 82.0 } else { 116.0 });
         assert_eq!(queries.get(), before + 1, "date query at {label}%");
+        let logical_height = height as f32 / scale;
+        let calendar_x = (logical_width - 352.0) / 2.0;
+        let calendar_y = (logical_height - 392.0) / 2.0;
+        ui.set_query_date("2024-02-29".into());
+        click(content_x + 352.0, if compact { 82.0 } else { 116.0 });
+        assert!(ui.get_calendar_open(), "date picker opens at {label}%");
+        assert_eq!(ui.get_calendar_caption(), "选择统计日期");
+        assert_eq!(ui.get_calendar_days().row_count(), 42);
+        save_preview(&window, &format!("calendar-{label}"));
+        if label == "minimum" {
+            ui.set_dark_mode(false);
+            slint::platform::update_timers_and_animations();
+            thread::sleep(Duration::from_millis(250));
+            save_preview(&window, "calendar-minimum-light");
+            ui.set_dark_mode(true);
+            slint::platform::update_timers_and_animations();
+            thread::sleep(Duration::from_millis(250));
+        }
+        let before = queries.get();
+        // Browse a month and a year in each direction without running queries.
+        click(calendar_x + 280.0, calendar_y + 64.0);
+        assert_eq!(ui.get_calendar_month(), "2024 年 3 月");
+        click(calendar_x + 68.0, calendar_y + 64.0);
+        assert_eq!(ui.get_calendar_month(), "2024 年 2 月");
+        click(calendar_x + 320.0, calendar_y + 64.0);
+        assert_eq!(ui.get_calendar_month(), "2025 年 2 月");
+        click(calendar_x + 32.0, calendar_y + 64.0);
+        assert_eq!(ui.get_calendar_month(), "2024 年 2 月");
+        assert_eq!(queries.get(), before);
+        // Leap day is the Thursday of row five, using Monday-based columns.
+        click(calendar_x + 176.0, calendar_y + 271.0);
+        assert!(!ui.get_calendar_open());
+        assert_eq!(ui.get_query_date(), "2024-02-29");
+        assert_eq!(queries.get(), before + 1, "selection queries immediately");
+        // Outside dismissal consumes the click, leaving query/date unchanged.
+        ui.invoke_calendar_requested(0);
+        slint::platform::update_timers_and_animations();
+        click(12.0, 12.0);
+        assert!(!ui.get_calendar_open());
+        assert_eq!(ui.get_query_date(), "2024-02-29");
+        assert_eq!(queries.get(), before + 1);
+        ui.invoke_calendar_requested(0);
+        slint::platform::update_timers_and_animations();
+        click(calendar_x + 300.0, calendar_y + 360.0);
+        assert!(!ui.get_calendar_open());
+        assert_eq!(ui.get_query_date(), "2024-02-29");
+        // Escape must work after reopening, not just on the first instance.
+        ui.invoke_calendar_requested(0);
+        slint::platform::update_timers_and_animations();
+        let key = |key: slint::platform::Key| {
+            ui.window()
+                .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: key.into() });
+            ui.window()
+                .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: key.into() });
+            slint::platform::update_timers_and_animations();
+        };
+        key(slint::platform::Key::Escape);
+        assert!(
+            !ui.get_calendar_open(),
+            "Escape closes calendar at {label}%"
+        );
+        ui.invoke_calendar_requested(0);
+        slint::platform::update_timers_and_animations();
+        key(slint::platform::Key::RightArrow);
+        assert_eq!(ui.get_calendar_selection(), "2024-03-01");
+        key(slint::platform::Key::Return);
+        assert!(!ui.get_calendar_open());
+        assert_eq!(ui.get_query_date(), "2024-03-01");
+        // CSV dates are independent and never start export or a stats query.
+        let before = queries.get();
+        let exports_before = exports.get();
+        ui.set_export_from_date("not-a-date".into());
+        ui.invoke_calendar_requested(1);
+        assert_eq!(
+            ui.get_calendar_selection(),
+            Local::now().date_naive().to_string()
+        );
+        ui.set_calendar_open(false);
+        ui.set_export_from_date("2024-02-29".into());
+        ui.set_export_to_date("2024-03-31".into());
+        ui.invoke_calendar_requested(1);
+        slint::platform::update_timers_and_animations();
+        click(calendar_x + 176.0, calendar_y + 271.0);
+        assert_eq!(ui.get_export_from_date(), "2024-02-29");
+        assert_eq!(ui.get_export_to_date(), "2024-03-31");
+        ui.invoke_calendar_requested(2);
+        slint::platform::update_timers_and_animations();
+        assert_eq!(ui.get_calendar_caption(), "选择导出结束日期");
+        click(calendar_x + 45.0, calendar_y + 360.0);
+        assert_eq!(
+            ui.get_export_to_date(),
+            Local::now().date_naive().to_string()
+        );
+        ui.invoke_calendar_requested(1);
+        slint::platform::update_timers_and_animations();
+        click(calendar_x + 112.0, calendar_y + 360.0);
+        assert_eq!(
+            ui.get_export_from_date(),
+            (Local::now().date_naive() - chrono::Duration::days(1)).to_string()
+        );
+        assert_eq!(queries.get(), before);
+        assert_eq!(exports.get(), exports_before);
+        ui.set_query_date(date.into());
         click(content_x + 150.0, if compact { 347.0 } else { 431.0 });
         assert_eq!(
             ui.get_selected_page(),
@@ -402,6 +506,27 @@ fn verify_ui_state() {
                     );
                 }
                 if page == 3 {
+                    let scroll = ui.get_page_scroll_y();
+                    let date_y = logical_height - padding - gap - 313.0;
+                    click((content_x + logical_width - padding) / 2.0 - 84.5, date_y);
+                    assert!(ui.get_calendar_open(), "CSV start picker at {label}%");
+                    assert_eq!(ui.get_calendar_caption(), "选择导出开始日期");
+                    click(calendar_x + 300.0, calendar_y + 360.0);
+                    assert!(!ui.get_calendar_open());
+                    click(logical_width - padding - 135.0, date_y);
+                    assert!(ui.get_calendar_open(), "CSV end picker at {label}%");
+                    assert_eq!(ui.get_calendar_caption(), "选择导出结束日期");
+                    save_preview(&window, &format!("calendar-export-{label}"));
+                    ui.window()
+                        .dispatch_event(slint::platform::WindowEvent::CloseRequested);
+                    assert!(!ui.get_calendar_open(), "closing panel dismisses calendar");
+                    ui.show().unwrap();
+                    slint::platform::update_timers_and_animations();
+                    assert_eq!(
+                        ui.get_page_scroll_y(),
+                        scroll,
+                        "calendar preserves scroll position"
+                    );
                     let before = exports.get();
                     click(
                         logical_width - padding - 64.0,
