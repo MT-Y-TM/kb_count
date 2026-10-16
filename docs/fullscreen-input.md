@@ -42,3 +42,5 @@
 ## 候选版检查
 
 最终代码的 `cargo fmt --all -- --check`、`cargo check --locked --offline`、`cargo clippy --all-targets --locked --offline -- -D warnings` 均通过。完整 `cargo test --locked --offline`：56 项通过、0 失败，58.39 秒，其中包含真实 Win32 注册查询与本进程权限查询。没有将这些测试等同为《原神》实测；管理员原神＋普通权限 kb_count 的最终游戏验证仍待完成。
+
+候选代码提交 `1c0d8c7`。`cargo build --release --locked --offline` 成功，耗时 4 分 59 秒。产物 `target/release/kb_count.exe`：17,120,768 字节，2026-10-16 23:55:07（+08:00）生成；SHA-256 为 `CEB1A6F38D0180857B920D0CF86CB2D5FE195EACA7A164200748B3A68FF65DA4`。PE 验证确认 x64、GUI 子系统、12 种图标及版本资源。运行中的旧 EXE 已仅在原目录改名保留为 `kb_count.before-game-input-20261016-235008.exe`，未强制终止用户采集进程，也未移动配置或统计库。
