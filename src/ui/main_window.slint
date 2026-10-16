@@ -148,6 +148,7 @@ export component MainWindow inherits Window {
     init => { Palette.color-scheme = root.dark_mode ? ColorScheme.dark : ColorScheme.light; }
 
     title: "kb_count";
+    icon: @image-url("../../assets/kb_count.svg");
     preferred-width: 1060px; preferred-height: 780px;
     min-width: 820px; min-height: 440px;
     default-font-family: "Microsoft YaHei UI";
@@ -161,9 +162,7 @@ export component MainWindow inherits Window {
                 padding: root.narrow ? 10px : 16px; spacing: 9px;
                 Rectangle {
                     height: 62px;
-                    Rectangle { x: 0px; y: 16px; width: 30px; height: 30px; border-radius: 8px; background: #477ce0;
-                        Text { text: "k"; color: white; font-size: 22px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
-                    }
+                    Image { x: 0px; y: 16px; width: 30px; height: 30px; source: @image-url("../../assets/kb_count.svg"); image-fit: contain; }
                     Text { x: root.narrow ? 35px : 40px; width: parent.width - (root.narrow ? 35px : 40px); height: parent.height; text: "kb_count"; font-size: root.narrow ? 14px : 17px; font-weight: 600; color: root.ink; vertical-alignment: center; }
                 }
                 if !root.narrow: Text { text: "你的输入，清晰可见"; font-size: 11px; color: root.muted; }
@@ -195,7 +194,7 @@ export component MainWindow inherits Window {
                         y: root.compact_layout ? 5px : 11px; width: 88px; height: 28px; border-radius: 14px;
                         background: root.capture_active ? (root.dark_mode ? #1c3c36 : #eaf6f0) : (root.dark_mode ? #443b26 : #fff4df);
                         Rectangle { x: 11px; y: 12px; width: 5px; height: 5px; border-radius: 3px; background: root.capture_active ? #46a785 : #cf9a3e; }
-                        Text { x: 22px; width: 60px; height: 28px; text: root.capture_active ? "正在统计" : "已暂停"; color: root.capture_active ? (root.dark_mode ? #9ad8c0 : #40866b) : #bb8e41; font-size: 12px; vertical-alignment: center; }
+                        Text { x: 22px; width: 60px; height: 28px; text: root.capture_active ? "正在统计" : "已暂停"; color: root.capture_active ? (root.dark_mode ? #9ad8c0 : #267253) : (root.dark_mode ? #efc77e : #805b18); font-size: 12px; vertical-alignment: center; }
                     }
                 }
                 VerticalLayout { horizontal-stretch: 0; padding-top: root.compact_layout ? 3px : 9px; padding-bottom: root.compact_layout ? 3px : 9px; ActionButton { text: root.capture_active ? "暂停统计" : "恢复统计"; clicked => { root.pause_clicked(); } } }

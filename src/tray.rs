@@ -52,11 +52,12 @@ unsafe fn run_windows() {
         NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DispatchMessageW, GetMessageW, IDI_APPLICATION,
-        LoadIconW, MSG, RegisterClassW, TranslateMessage, WM_APP, WNDCLASSW, WS_EX_TOOLWINDOW,
-        WS_POPUP,
+        CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DestroyIcon, DispatchMessageW, GetMessageW,
+        GetSystemMetrics, HICON, IDI_APPLICATION, IMAGE_ICON, LR_DEFAULTCOLOR, LoadIconW,
+        LoadImageW, MSG, RegisterClassW, SM_CXSMICON, TranslateMessage, WM_APP, WNDCLASSW,
+        WS_EX_TOOLWINDOW, WS_POPUP,
     };
-    use windows::core::w;
+    use windows::core::{PCWSTR, w};
     let instance =
         windows::Win32::System::LibraryLoader::GetModuleHandleW(None).expect("module handle");
     let class = WNDCLASSW {
@@ -92,7 +93,32 @@ unsafe fn run_windows() {
     data.uID = 1;
     data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     data.uCallbackMessage = WM_APP + 1;
-    data.hIcon = LoadIconW(None, IDI_APPLICATION).unwrap_or_default();
+    let icon_size = GetSystemMetrics(SM_CXSMICON).max(16);
+    struct TrayIcon(Option<HICON>);
+    impl Drop for TrayIcon {
+        fn drop(&mut self) {
+            if let Some(icon) = self.0 {
+                let _ = unsafe { DestroyIcon(icon) };
+            }
+        }
+    }
+    // Own the requested resolution; LR_SHARED may reuse a differently sized
+    // icon. Keep the handle until after removing it from the notification area.
+    let tray_icon = TrayIcon(
+        LoadImageW(
+            instance,
+            PCWSTR(std::ptr::without_provenance::<u16>(1)),
+            IMAGE_ICON,
+            icon_size,
+            icon_size,
+            LR_DEFAULTCOLOR,
+        )
+        .ok()
+        .map(|handle| HICON(handle.0)),
+    );
+    data.hIcon = tray_icon
+        .0
+        .unwrap_or_else(|| LoadIconW(None, IDI_APPLICATION).unwrap_or_default());
     for (dst, src) in data.szTip.iter_mut().zip("kb_count".encode_utf16()) {
         *dst = src;
     }

@@ -279,6 +279,8 @@ fn verify_ui_state() {
         ("100", 1.0, 1280, 720),
         ("125", 1.25, 1280, 720),
         ("150", 1.5, 1280, 720),
+        ("175", 1.75, 1680, 945),
+        ("200", 2.0, 1920, 1080),
         ("minimum", 1.0, 820, 440),
     ] {
         window
@@ -379,7 +381,7 @@ fn verify_ui_state() {
                 .expect("icon worker completion");
             event();
         }
-        assert_eq!(ui.get_app_rows().row_data(0).unwrap().icon.size().width, 64);
+        assert_eq!(ui.get_app_rows().row_data(0).unwrap().icon.size().width, 96);
         ui.set_app_search("PowerShell".into());
         slint::platform::update_timers_and_animations();
         assert!(
@@ -390,18 +392,27 @@ fn verify_ui_state() {
         slint::platform::update_timers_and_animations();
         refresh_detail(&ui, &db, date, &paths[0]).unwrap();
         assert!(ui.get_detail_has_icon(), "details reuse the cached icon");
-        for (label, scale) in [("100", 1.0), ("125", 1.25), ("150", 1.5)] {
+        for (label, scale, width, height) in [
+            ("100", 1.0, 1280, 720),
+            ("125", 1.25, 1280, 720),
+            ("150", 1.5, 1280, 720),
+            ("175", 1.75, 1680, 945),
+            ("200", 2.0, 1920, 1080),
+        ] {
             window
                 .window()
                 .dispatch_event(slint::platform::WindowEvent::ScaleFactorChanged {
                     scale_factor: scale,
                 });
-            window.set_size(slint::PhysicalSize::new(1280, 720));
+            window.set_size(slint::PhysicalSize::new(width, height));
             for page in [0, 2] {
                 ui.set_selected_page(page);
                 save_preview(&window, &format!("icons-{label}-{page}"));
             }
         }
+        ui.set_capture_active(false);
+        ui.set_selected_page(0);
+        save_preview(&window, "paused-dark-200");
         ui.set_dark_mode(false);
         ui.set_theme_text("主题：浅色".into());
         slint::platform::update_timers_and_animations();
@@ -409,10 +420,12 @@ fn verify_ui_state() {
             thread::sleep(Duration::from_millis(250));
         }
         ui.set_selected_page(0);
-        save_preview(&window, "icons-light-150");
+        save_preview(&window, "paused-light-200");
+        ui.set_capture_active(true);
+        save_preview(&window, "icons-light-200");
         refresh_heatmap(&ui, &db, date).unwrap();
         ui.set_selected_page(1);
-        save_preview(&window, "heatmap-readable-150");
+        save_preview(&window, "heatmap-readable-200");
         assert!(
             ui.get_all_app_rows().iter().all(|row| !row.has_icon),
             "the base model does not retain a second icon cache"

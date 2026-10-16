@@ -8,7 +8,7 @@ use std::sync::mpsc::{SyncSender, sync_channel};
 
 const CACHE_LIMIT: usize = 128;
 const QUEUE_LIMIT: usize = 32;
-const ICON_SIZE: u32 = 64;
+const ICON_SIZE: u32 = 96;
 
 #[derive(Default)]
 struct IconCache {
@@ -359,5 +359,45 @@ mod tests {
         assert_eq!(pixels.len(), (ICON_SIZE * ICON_SIZE) as usize);
         assert!(pixels.iter().any(|pixel| pixel.a > 0));
         assert!(pixels.iter().any(|pixel| pixel.a == 0));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn embedded_brand_resource_loads_at_common_windows_icon_sizes() {
+        use windows::Win32::Graphics::Gdi::{BITMAP, DeleteObject, GetObjectW};
+        use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            DestroyIcon, GetIconInfo, HICON, ICONINFO, IMAGE_ICON, LR_DEFAULTCOLOR, LoadImageW,
+        };
+        use windows::core::PCWSTR;
+        unsafe {
+            let instance = GetModuleHandleW(None).unwrap();
+            for size in [16, 20, 24, 28, 32, 40, 48, 56, 64, 96, 128, 256] {
+                let handle = LoadImageW(
+                    instance,
+                    PCWSTR(std::ptr::without_provenance::<u16>(1)),
+                    IMAGE_ICON,
+                    size,
+                    size,
+                    LR_DEFAULTCOLOR,
+                )
+                .expect("embedded brand icon");
+                let icon = HICON(handle.0);
+                let mut info = ICONINFO::default();
+                let read = GetIconInfo(icon, &mut info);
+                let mut bitmap = BITMAP::default();
+                let bitmap_read = GetObjectW(
+                    info.hbmColor,
+                    std::mem::size_of::<BITMAP>() as i32,
+                    Some((&mut bitmap as *mut BITMAP).cast()),
+                );
+                let _ = DeleteObject(info.hbmColor);
+                let _ = DeleteObject(info.hbmMask);
+                let _ = DestroyIcon(icon);
+                assert!(read.is_ok());
+                assert_ne!(bitmap_read, 0);
+                assert_eq!((bitmap.bmWidth, bitmap.bmHeight), (size, size));
+            }
+        }
     }
 }
