@@ -87,3 +87,7 @@ Remove-Item Env:KB_COUNT_RENDER_UI, Env:KB_COUNT_CAPTURE_NOTICE_ONLY
 预览位于 `target/ui-review/capture-limited-{light,dark}.bmp`、`capture-limited-{light,dark}-bottom.bmp` 和 `capture-limited-settings-{light,dark}.bmp`。该快捷运行只检查本轮交互，不能替代正常完整测试；它不注册输入设备、不切换桌面前台，也不读取个人数据库。
 
 最终完整 `cargo test --locked --offline`：56 项通过、0 失败，90.83 秒。单独预览回归 1 项通过，11.49 秒；检查了深浅主题下最小窗口的实际渲染。普通测试也先完成真实布局帧再发送滚轮及点击，不依赖开启截图才能通过。完整回归保留原有 100%、125%、150%、175%、200% 离线缩放及采集、数据库、隐私测试；真实跨显示器 DPI 与系统单独文本缩放仍属于前述实机验证范围。
+
+最终 `cargo fmt --all -- --check`、`cargo check --locked --offline`、`cargo clippy --all-targets --locked --offline -- -D warnings` 均通过。功能提交 `94e1bd5`，独立 Raw Input 排查工具提交 `32b2baf`；仅本地提交，没有推送远端。
+
+`cargo build --release --locked --offline` 成功，耗时 5 分 19 秒。产物 `target/release/kb_count.exe` 于 2026-10-17 14:50:34（+08:00）生成，17,249,280 字节，SHA-256 `CCE3DA300CACD6BA72BBE567A358412DC3ABBC0550D3D0B9D49AD7C05EE6C39F`。`tools/verify_release.py` 确认 x64、GUI 子系统、12 种内嵌图标和版本资源。旧 EXE 保留在同目录的 `kb_count.before-ui-limit-20261017.exe` 以便回退；没有改动配置格式、数据库 Schema 或默认数据路径。验证结束时用户已退出游戏和采集器，没有自动重新启动采集进程。此处是构建、资源与离线交互验证，不能代替新版本真实 Windows 多屏运行或长期资源测量。
