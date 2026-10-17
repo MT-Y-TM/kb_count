@@ -440,6 +440,157 @@ fn verify_capture_limit_notice(ui: &MainWindow, window: &MinimalSoftwareWindow) 
     ui.set_all_app_rows(Default::default());
 }
 
+fn verify_background_refresh(ui: &MainWindow, events: &mpsc::Receiver<UiEvent>) {
+    use crate::storage::history::sample;
+    let database =
+        Mutex::new(storage::database::Database::open(PathBuf::from(":memory:").as_path()).unwrap());
+    let date = "2026-10-17";
+    let add = |count| {
+        database
+            .lock()
+            .unwrap()
+            .record_batch(&[sample(date, Some(9), "Unknown", "key", count)])
+            .unwrap()
+    };
+    let (sender, notices) = mpsc::sync_channel(1);
+    let mut last = 0;
+    ui.set_selected_page(0);
+    ui.set_date_text(date.into());
+    ui.set_query_date("2026-".into());
+    ui.set_app_search("test".into());
+    ui.show().unwrap();
+    ui.window().set_minimized(false);
+    add(5);
+    refresh_panel(ui, &database, RankingSort::Total, 1, &notices, &mut last);
+    assert_eq!(ui.get_keyboard_text(), "5");
+    assert_eq!(last, 1);
+
+    ui.window().set_minimized(true);
+    assert!(
+        ui.window().is_visible(),
+        "minimization does not hide the panel"
+    );
+    assert!(!panel_is_presented(ui));
+    sender
+        .try_send(collector::CaptureNotice::ElevatedForegroundObserved)
+        .unwrap();
+    add(7);
+    refresh_panel(ui, &database, RankingSort::Total, 2, &notices, &mut last);
+    assert_eq!(ui.get_keyboard_text(), "5");
+    assert_eq!(last, 1, "skipped data remains pending");
+    assert!(
+        !ui.get_capture_limit_seen(),
+        "minimized panels do not consume notices"
+    );
+    ui.window().set_minimized(false);
+    refresh_panel(ui, &database, RankingSort::Total, 2, &notices, &mut last);
+    assert_eq!(ui.get_keyboard_text(), "12");
+    assert_eq!(last, 2);
+    assert!(ui.get_capture_limit_seen());
+    assert_eq!(
+        ui.get_query_date(),
+        "2026-",
+        "restore preserves date drafts"
+    );
+    assert_eq!(ui.get_app_search(), "test", "restore preserves search");
+
+    add(3);
+    let guard = database.lock().unwrap();
+    refresh_panel(ui, &database, RankingSort::Total, 3, &notices, &mut last);
+    assert_eq!(
+        last, 2,
+        "busy storage must not acknowledge a stale snapshot"
+    );
+    assert_eq!(ui.get_keyboard_text(), "12");
+    drop(guard);
+    refresh_panel(ui, &database, RankingSort::Total, 3, &notices, &mut last);
+    assert_eq!(ui.get_keyboard_text(), "15");
+    assert_eq!(last, 3);
+
+    ui.hide().unwrap();
+    add(2);
+    refresh_panel(ui, &database, RankingSort::Total, 4, &notices, &mut last);
+    assert_eq!(ui.get_keyboard_text(), "15");
+    assert_eq!(last, 3);
+    ui.show().unwrap();
+    refresh_panel(ui, &database, RankingSort::Total, 4, &notices, &mut last);
+    assert_eq!(ui.get_keyboard_text(), "17");
+    assert_eq!(last, 4);
+
+    #[cfg(windows)]
+    {
+        // Read a real embedded Windows icon, never execute the file. Hold its
+        // completion callback until after minimization, including a restore
+        // that happens before the next periodic statistics refresh.
+        ui.set_app_search("".into());
+        let path = stats::policy::normalize_app_path(&format!(
+            r"{}\explorer.exe",
+            std::env::var("SystemRoot").unwrap()
+        ));
+        database
+            .lock()
+            .unwrap()
+            .record_batch(&[sample(date, Some(9), &path, "key", 1)])
+            .unwrap();
+        refresh_panel(ui, &database, RankingSort::Total, 5, &notices, &mut last);
+        refresh_detail(ui, &database.lock().unwrap(), date, &path).unwrap();
+        assert!(!ui.get_detail_has_icon());
+        ui.window().set_minimized(true);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while app_icons::pending_count() > 0 {
+            events
+                .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+                .expect("deferred icon completion")();
+        }
+        assert!(
+            !ui.get_detail_has_icon(),
+            "minimized completions only fill the cache"
+        );
+        assert_eq!(app_icons::cached(&path).size().width, 96);
+        app_icons::refresh_deferred(ui);
+        assert!(!ui.get_detail_has_icon());
+
+        let rows = ui.get_app_rows();
+        let mut unrequested = rows.row_data(0).unwrap();
+        unrequested.path = r"C:\NotYetRequested\minimized.exe".into();
+        ui.set_app_rows([unrequested].as_slice().into());
+        app_icons::populate(ui);
+        assert_eq!(
+            app_icons::pending_count(),
+            0,
+            "minimized panels do not request icons"
+        );
+        ui.set_app_rows(rows);
+        ui.window().set_minimized(false);
+        let guard = database.lock().unwrap();
+        refresh_panel(ui, &database, RankingSort::Total, 5, &notices, &mut last);
+        assert_eq!(last, 5);
+        assert!(
+            ui.get_detail_has_icon(),
+            "same-generation restoration applies deferred icons"
+        );
+        assert!(
+            ui.get_app_rows()
+                .iter()
+                .find(|row| row.path.as_str() == path)
+                .unwrap()
+                .has_icon
+        );
+        assert_eq!(ui.get_keyboard_text(), "18");
+        drop(guard);
+    }
+    #[cfg(not(windows))]
+    let _ = events;
+    ui.set_app_search("".into());
+    ui.set_capture_limit_seen(false);
+    ui.set_detail_loaded(false);
+    ui.set_detail_icon(Default::default());
+    ui.set_detail_has_icon(false);
+    ui.set_app_rows(Default::default());
+    ui.set_all_app_rows(Default::default());
+    ui.hide().unwrap();
+}
+
 fn verify_ui_state() {
     let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
     let (event_sender, event_receiver) = mpsc::sync_channel::<UiEvent>(64);
@@ -453,6 +604,10 @@ fn verify_ui_state() {
     let ui = MainWindow::new().expect("UI");
     bind_app_search(&ui);
     verify_close_preferences(&ui, &window);
+    verify_background_refresh(&ui, &event_receiver);
+    if std::env::var_os("KB_COUNT_BACKGROUND_ONLY").is_some() {
+        return;
+    }
     verify_capture_limit_notice(&ui, &window);
     if std::env::var_os("KB_COUNT_CAPTURE_NOTICE_ONLY").is_some() {
         ui.hide().unwrap();

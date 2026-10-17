@@ -1,6 +1,6 @@
 //! Session-only icons. Disk access and Win32 extraction never run on the UI or
 //! collector threads. Only an open panel requests work; failure keeps initials.
-use crate::MainWindow;
+use crate::{MainWindow, panel_is_presented};
 use slint::{ComponentHandle, Model};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -16,6 +16,7 @@ struct IconCache {
     order: VecDeque<String>,
     pending: HashSet<String>,
     sender: Option<SyncSender<(String, slint::Weak<MainWindow>)>>,
+    deferred: bool,
 }
 
 thread_local! {
@@ -46,7 +47,7 @@ impl IconCache {
 }
 
 pub fn populate(ui: &MainWindow) {
-    if !ui.window().is_visible() {
+    if !panel_is_presented(ui) {
         return;
     }
     CACHE.with_borrow_mut(|cache| {
@@ -82,6 +83,39 @@ pub fn populate(ui: &MainWindow) {
     });
 }
 
+// Completed requests may enter the cache while hidden/minimized. Apply their
+// results on return even if no database batch has changed in the meantime.
+pub fn refresh_deferred(ui: &MainWindow) {
+    if !panel_is_presented(ui) {
+        return;
+    }
+    let images = CACHE.with_borrow_mut(|cache| {
+        if !cache.deferred {
+            return None;
+        }
+        cache.deferred = false;
+        Some(cache.images.clone())
+    });
+    let Some(images) = images else {
+        return;
+    };
+    let model = ui.get_app_rows();
+    for index in 0..model.row_count() {
+        if let Some(mut row) = model.row_data(index)
+            && let Some(icon) = images.get(row.path.as_str())
+        {
+            row.has_icon = icon.size().width > 0;
+            row.icon = icon.clone();
+            model.set_row_data(index, row);
+        }
+    }
+    if let Some(icon) = images.get(ui.get_detail_path().as_str()) {
+        ui.set_detail_has_icon(icon.size().width > 0);
+        ui.set_detail_icon(icon.clone());
+    }
+    populate(ui);
+}
+
 fn start_worker() -> Option<SyncSender<(String, slint::Weak<MainWindow>)>> {
     let (sender, receiver) = sync_channel::<(String, slint::Weak<MainWindow>)>(QUEUE_LIMIT);
     std::thread::Builder::new()
@@ -99,7 +133,7 @@ fn start_worker() -> Option<SyncSender<(String, slint::Weak<MainWindow>)>> {
                         .unwrap_or_default();
                     CACHE.with_borrow_mut(|cache| cache.insert(path.clone(), icon.clone()));
                     if let Some(ui) = ui.upgrade() {
-                        if ui.window().is_visible() {
+                        if panel_is_presented(&ui) {
                             let model = ui.get_app_rows();
                             for index in 0..model.row_count() {
                                 if let Some(mut row) = model.row_data(index)
@@ -114,6 +148,8 @@ fn start_worker() -> Option<SyncSender<(String, slint::Weak<MainWindow>)>> {
                                 ui.set_detail_has_icon(icon.size().width > 0);
                                 ui.set_detail_icon(icon);
                             }
+                        } else {
+                            CACHE.with_borrow_mut(|cache| cache.deferred = true);
                         }
                         // Continue a bounded batch, without timers or per-input work.
                         populate(&ui);

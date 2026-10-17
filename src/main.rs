@@ -766,11 +766,39 @@ fn show_startup_error(error: &anyhow::Error) {
     }
 }
 
+fn panel_is_presented(ui: &MainWindow) -> bool {
+    ui.window().is_visible() && !ui.window().is_minimized()
+}
+
 fn refresh_capture_notice(ui: &MainWindow, notices: &mpsc::Receiver<collector::CaptureNotice>) {
-    if ui.window().is_visible()
+    if panel_is_presented(ui)
         && let Ok(collector::CaptureNotice::ElevatedForegroundObserved) = notices.try_recv()
     {
         ui.set_capture_limit_seen(true);
+    }
+}
+
+fn refresh_panel(
+    ui: &MainWindow,
+    database: &Mutex<storage::database::Database>,
+    sort: RankingSort,
+    generation: u64,
+    notices: &mpsc::Receiver<collector::CaptureNotice>,
+    last_generation: &mut u64,
+) {
+    if !panel_is_presented(ui) {
+        return;
+    }
+    refresh_capture_notice(ui, notices);
+    app_icons::refresh_deferred(ui);
+    if generation == *last_generation {
+        return;
+    }
+    let date = ui.get_date_text().to_string();
+    if let Ok(database) = database.try_lock()
+        && refresh_overview(ui, &database, &date, sort).is_ok()
+    {
+        *last_generation = generation;
     }
 }
 
@@ -1376,8 +1404,9 @@ fn run() -> anyhow::Result<()> {
                         ui.set_status_text(format!("查询失败：{error}").into());
                     }
                     let _ = ui.show();
-                    refresh_capture_notice(&ui, &tray_notices);
                     ui.window().set_minimized(false);
+                    refresh_capture_notice(&ui, &tray_notices);
+                    app_icons::refresh_deferred(&ui);
                     app_icons::populate(&ui);
                     #[cfg(windows)]
                     ui_window::fit_to_work_area(ui.window());
@@ -1440,26 +1469,14 @@ fn run() -> anyhow::Result<()> {
         let Some(ui) = refresh_timer_ui.upgrade() else {
             return;
         };
-        if !ui.window().is_visible() {
-            return;
-        }
-        refresh_capture_notice(&ui, &capture_notices);
-        let generation = refresh_timer_generation.load(Ordering::Acquire);
-        if generation == last_generation {
-            return;
-        }
-        let date = ui.get_date_text().to_string();
-        if let Ok(database) = refresh_timer_db.try_lock()
-            && refresh_overview(
-                &ui,
-                &database,
-                &date,
-                *refresh_timer_sort.lock().expect("ranking state poisoned"),
-            )
-            .is_ok()
-        {
-            last_generation = generation;
-        }
+        refresh_panel(
+            &ui,
+            &refresh_timer_db,
+            *refresh_timer_sort.lock().expect("ranking state poisoned"),
+            refresh_timer_generation.load(Ordering::Acquire),
+            &capture_notices,
+            &mut last_generation,
+        );
     });
     ui.hide()?;
     run_desktop_event_loop()?;

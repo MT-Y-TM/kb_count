@@ -91,3 +91,19 @@ Remove-Item Env:KB_COUNT_RENDER_UI, Env:KB_COUNT_CAPTURE_NOTICE_ONLY
 最终 `cargo fmt --all -- --check`、`cargo check --locked --offline`、`cargo clippy --all-targets --locked --offline -- -D warnings` 均通过。功能提交 `94e1bd5`，独立 Raw Input 排查工具提交 `32b2baf`；仅本地提交，没有推送远端。
 
 `cargo build --release --locked --offline` 成功，耗时 5 分 19 秒。产物 `target/release/kb_count.exe` 于 2026-10-17 14:50:34（+08:00）生成，17,249,280 字节，SHA-256 `CCE3DA300CACD6BA72BBE567A358412DC3ABBC0550D3D0B9D49AD7C05EE6C39F`。`tools/verify_release.py` 确认 x64、GUI 子系统、12 种内嵌图标和版本资源。旧 EXE 保留在同目录的 `kb_count.before-ui-limit-20261017.exe` 以便回退；没有改动配置格式、数据库 Schema 或默认数据路径。验证结束时用户已退出游戏和采集器，没有自动重新启动采集进程。此处是构建、资源与离线交互验证，不能代替新版本真实 Windows 多屏运行或长期资源测量。
+
+## 最小化后的刷新与恢复
+
+此前只检查 `is_visible()`，窗口最小化时仍可能进行统计查询和图标模型更新。现在自动刷新、权限通知和异步图标更新共同检查“显示且未最小化”。统计刷新仍沿用现有 5 秒周期，隐藏或最小化时不确认新的统计版本；恢复后查询最新已提交数据，日期草稿、搜索和排序保持不变。数据库忙时也不确认尚未显示的版本，之后可以重试。采集、隐私策略和写入线程不依赖面板状态，不因最小化而暂停。
+
+已经发出的图标请求允许完成有界内存缓存，但不更新最小化面板，也不继续请求后续批次。缓存增加一个待显示标记，在恢复后的刷新中补回当前排行与详情的图标，即使统计版本没有变化也会处理。随后继续原有的有界批次；不增加线程、定时器或磁盘缓存。通过托盘恢复时先解除最小化，再处理待显示信息。
+
+专项回归使用 Slint 软件窗口、内存 SQLite 和 Windows Explorer 的真实内嵌图标，不启动 Explorer、不操作桌面前台或个人统计库。覆盖最小化期间新增聚合数据、恢复后的总量、保留日期草稿与搜索、数据库繁忙后重试、隐藏后恢复、最小化时不请求新图标、后台完成图标只填缓存，以及没有新统计写入时仍能补回排行和详情图标。
+
+```powershell
+$env:KB_COUNT_BACKGROUND_ONLY = '1'
+cargo test --locked --offline ui_tests::refresh_preserves_ui_filters_and_privacy_state -- --exact
+Remove-Item Env:KB_COUNT_BACKGROUND_ONLY
+```
+
+该快捷检查通过 1 项，耗时 2.24 秒；正常完整测试仍需另行执行。这里验证查询及模型更新的行为，不将其换算为未经测量的 CPU 或内存下降百分比。
