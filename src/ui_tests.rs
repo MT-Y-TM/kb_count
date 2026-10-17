@@ -41,10 +41,7 @@ impl Platform for PreviewPlatform {
 
 // Test-only rendering uses Slint's own software backend, without opening a
 // desktop window, registering input devices, or accessing the user's database.
-fn save_preview(window: &MinimalSoftwareWindow, name: &str) {
-    if std::env::var_os("KB_COUNT_RENDER_UI").is_none() {
-        return;
-    }
+fn render_frame(window: &MinimalSoftwareWindow) -> Vec<slint::Rgb8Pixel> {
     slint::platform::update_timers_and_animations();
     let size = window.size();
     let mut pixels = vec![slint::Rgb8Pixel::default(); (size.width * size.height) as usize];
@@ -52,6 +49,15 @@ fn save_preview(window: &MinimalSoftwareWindow, name: &str) {
     assert!(window.draw_if_needed(|renderer| {
         renderer.render(&mut pixels, size.width as usize);
     }));
+    pixels
+}
+
+fn save_preview(window: &MinimalSoftwareWindow, name: &str) {
+    if std::env::var_os("KB_COUNT_RENDER_UI").is_none() {
+        return;
+    }
+    let pixels = render_frame(window);
+    let size = window.size();
     let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/ui-review");
     std::fs::create_dir_all(&directory).expect("preview directory");
     let mut file = std::io::BufWriter::new(
@@ -279,6 +285,161 @@ fn verify_close_preferences(ui: &MainWindow, window: &MinimalSoftwareWindow) {
     ui.set_capture_active(true);
 }
 
+fn verify_capture_limit_notice(ui: &MainWindow, window: &MinimalSoftwareWindow) {
+    let (sender, receiver) = mpsc::sync_channel(1);
+    ui.set_keyboard_text("12,345".into());
+    ui.set_mouse_text("2,468".into());
+    ui.set_wheel_text("357".into());
+    ui.set_app_text("1".into());
+    let row = AppRow {
+        name: "Editor.exe".into(),
+        path: r"c:\preview\editor.exe".into(),
+        initial: "E".into(),
+        keyboard: "12,345".into(),
+        mouse: "2,468".into(),
+        wheel: "357".into(),
+        total: "15,170".into(),
+        rank: 1,
+        share: 1.0,
+        share_text: "100%".into(),
+        ..Default::default()
+    };
+    ui.set_app_rows([row.clone()].as_slice().into());
+    ui.set_all_app_rows([row].as_slice().into());
+    let selected = Rc::new(std::cell::RefCell::new(String::new()));
+    ui.on_ranking_app_clicked({
+        let selected = selected.clone();
+        move |path| *selected.borrow_mut() = path.to_string()
+    });
+    ui.set_date_text("2026-10-17".into());
+    ui.set_query_date("2026-10-17".into());
+    ui.set_version_text(env!("CARGO_PKG_VERSION").into());
+    ui.set_theme_text("切换主题".into());
+    ui.set_startup_text("开机启动：未开启".into());
+    ui.hide().unwrap();
+    sender
+        .try_send(collector::CaptureNotice::ElevatedForegroundObserved)
+        .unwrap();
+    refresh_capture_notice(ui, &receiver);
+    assert!(
+        !ui.get_capture_limit_seen(),
+        "hidden panels must not update"
+    );
+    assert!(
+        sender
+            .try_send(collector::CaptureNotice::ElevatedForegroundObserved)
+            .is_err()
+    );
+    ui.show().unwrap();
+    refresh_capture_notice(ui, &receiver);
+    assert!(ui.get_capture_limit_seen());
+    assert_eq!(
+        ui.get_keyboard_text(),
+        "12,345",
+        "the notice does not alter statistics"
+    );
+    assert!(
+        ui.get_capture_active(),
+        "a warning must not pause collection"
+    );
+    refresh_capture_notice(ui, &receiver);
+    assert!(
+        ui.get_capture_limit_seen(),
+        "returning to our panel retains the warning"
+    );
+    window.set_size(slint::PhysicalSize::new(820, 440));
+    for dark in [false, true] {
+        ui.set_dark_mode(dark);
+        ui.set_selected_page(0);
+        // Hit testing must follow a real layout/render frame, even when PNG
+        // preview output is disabled for the normal test run.
+        render_frame(window);
+        save_preview(
+            window,
+            if dark {
+                "capture-limited-dark"
+            } else {
+                "capture-limited-light"
+            },
+        );
+        ui.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                position: slint::LogicalPosition::new(145.0, 300.0),
+                delta_x: 0.0,
+                delta_y: -10_000.0,
+            });
+        slint::platform::update_timers_and_animations();
+        render_frame(window);
+        assert!(
+            ui.get_page_scroll_y() < -64.0,
+            "the complete overview remains reachable: offset {}",
+            ui.get_page_scroll_y()
+        );
+        save_preview(
+            window,
+            if dark {
+                "capture-limited-dark-bottom"
+            } else {
+                "capture-limited-light-bottom"
+            },
+        );
+        let position = slint::LogicalPosition::new(760.0, 412.0);
+        let button = slint::platform::PointerEventButton::Left;
+        ui.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerPressed { position, button });
+        ui.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerReleased { position, button });
+        slint::platform::update_timers_and_animations();
+        render_frame(window);
+        assert_eq!(
+            ui.get_page_scroll_y(),
+            0.0,
+            "overview back-to-top is clickable at minimum size"
+        );
+        ui.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                position: slint::LogicalPosition::new(145.0, 300.0),
+                delta_x: 0.0,
+                delta_y: -10_000.0,
+            });
+        slint::platform::update_timers_and_animations();
+        render_frame(window);
+        let position = slint::LogicalPosition::new(370.0, 393.0 + ui.get_page_scroll_y());
+        ui.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerPressed { position, button });
+        ui.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerReleased { position, button });
+        slint::platform::update_timers_and_animations();
+        assert_eq!(
+            ui.get_selected_page(),
+            2,
+            "the overview row is reachable with a warning"
+        );
+        assert_eq!(selected.borrow().as_str(), r"c:\preview\editor.exe");
+        ui.set_selected_page(3);
+        ui.set_page_scroll_y(0.0);
+        save_preview(
+            window,
+            if dark {
+                "capture-limited-settings-dark"
+            } else {
+                "capture-limited-settings-light"
+            },
+        );
+    }
+    ui.set_capture_active(false);
+    assert!(
+        ui.get_capture_limit_seen(),
+        "pausing must retain the completeness notice"
+    );
+    ui.set_capture_limit_seen(false);
+    ui.set_capture_active(true);
+    ui.set_selected_page(0);
+    ui.set_page_scroll_y(0.0);
+    ui.set_app_rows(Default::default());
+    ui.set_all_app_rows(Default::default());
+}
+
 fn verify_ui_state() {
     let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
     let (event_sender, event_receiver) = mpsc::sync_channel::<UiEvent>(64);
@@ -292,6 +453,11 @@ fn verify_ui_state() {
     let ui = MainWindow::new().expect("UI");
     bind_app_search(&ui);
     verify_close_preferences(&ui, &window);
+    verify_capture_limit_notice(&ui, &window);
+    if std::env::var_os("KB_COUNT_CAPTURE_NOTICE_ONLY").is_some() {
+        ui.hide().unwrap();
+        return;
+    }
     date_picker::bind(&ui);
     if std::env::var_os("KB_COUNT_ACTIVITY_ONLY").is_some() {
         verify_activity_and_close(&ui, &window);

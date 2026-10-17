@@ -766,6 +766,14 @@ fn show_startup_error(error: &anyhow::Error) {
     }
 }
 
+fn refresh_capture_notice(ui: &MainWindow, notices: &mpsc::Receiver<collector::CaptureNotice>) {
+    if ui.window().is_visible()
+        && let Ok(collector::CaptureNotice::ElevatedForegroundObserved) = notices.try_recv()
+    {
+        ui.set_capture_limit_seen(true);
+    }
+}
+
 fn run() -> anyhow::Result<()> {
     #[cfg(windows)]
     let _instance_mutex = unsafe {
@@ -836,7 +844,9 @@ fn run() -> anyhow::Result<()> {
     let diagnostics = std::env::args_os()
         .any(|arg| arg == "--capture-diagnostics")
         .then(|| dir.join("logs").join("input-diagnostics.toml"));
-    let events = collector::start(Arc::clone(&enabled), diagnostics);
+    let (capture_notice_tx, capture_notice_rx) = mpsc::sync_channel(1);
+    let capture_notices = std::rc::Rc::new(capture_notice_rx);
+    let events = collector::start(Arc::clone(&enabled), diagnostics, capture_notice_tx);
     let db_writer = Arc::clone(&db);
     let data_generation = Arc::new(AtomicU64::new(0));
     let writer_generation = Arc::clone(&data_generation);
@@ -1342,6 +1352,7 @@ fn run() -> anyhow::Result<()> {
     let tray_sort = Arc::clone(&sort_state);
     let tray_shutdown = writer_command_tx.clone();
     let tray_config = Arc::clone(&config_state);
+    let tray_notices = capture_notices.clone();
     let tray_timer = Timer::default();
     tray_timer.start(TimerMode::Repeated, Duration::from_millis(250), move || {
         let Some(command) = tray::take_request() else {
@@ -1365,6 +1376,7 @@ fn run() -> anyhow::Result<()> {
                         ui.set_status_text(format!("查询失败：{error}").into());
                     }
                     let _ = ui.show();
+                    refresh_capture_notice(&ui, &tray_notices);
                     ui.window().set_minimized(false);
                     app_icons::populate(&ui);
                     #[cfg(windows)]
@@ -1431,6 +1443,7 @@ fn run() -> anyhow::Result<()> {
         if !ui.window().is_visible() {
             return;
         }
+        refresh_capture_notice(&ui, &capture_notices);
         let generation = refresh_timer_generation.load(Ordering::Acquire);
         if generation == last_generation {
             return;

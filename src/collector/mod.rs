@@ -4,14 +4,20 @@ use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptureNotice {
+    ElevatedForegroundObserved,
+}
+
 pub fn start(
     enabled: Arc<AtomicBool>,
     diagnostics: Option<std::path::PathBuf>,
+    notices: SyncSender<CaptureNotice>,
 ) -> Receiver<InputEvent> {
     let (tx, rx) = mpsc::sync_channel(8192);
     thread::Builder::new()
         .name("kb-input-collector".into())
-        .spawn(move || raw_input::run(tx, enabled, diagnostics))
+        .spawn(move || raw_input::run(tx, enabled, diagnostics, notices))
         .expect("unable to start collector");
     rx
 }
@@ -107,6 +113,8 @@ mod raw_input {
     static MOUSE_FULLSCREEN_ATTRIBUTION: AtomicU64 = AtomicU64::new(0);
     static REGISTRATION_REPAIRS: AtomicU64 = AtomicU64::new(0);
     static DIAGNOSTICS_SENDER: OnceLock<SyncSender<InputDiagnostics>> = OnceLock::new();
+    static NOTICE_SENDER: OnceLock<SyncSender<CaptureNotice>> = OnceLock::new();
+    static ELEVATED_FOREGROUND_SEEN: AtomicBool = AtomicBool::new(false);
     const RI_MOUSE_WHEEL: u16 = 0x0400;
     const RI_MOUSE_HWHEEL: u16 = 0x0800;
     const RI_MOUSE_BUTTON_4_DOWN: u16 = 0x0040;
@@ -126,8 +134,10 @@ mod raw_input {
         tx: SyncSender<InputEvent>,
         enabled: Arc<AtomicBool>,
         diagnostics: Option<std::path::PathBuf>,
+        notices: SyncSender<CaptureNotice>,
     ) {
         let _ = SENDER.set(tx);
+        let _ = NOTICE_SENDER.set(notices);
         let _ = CAPTURE_ENABLED.set(enabled);
         if let Some(path) = diagnostics {
             start_diagnostic_writer(path);
@@ -228,6 +238,7 @@ mod raw_input {
             if SetTimer(hwnd, 1, 10_000, None) == 0 {
                 tracing::warn!("unable to start mouse input diagnostic timer");
             }
+            check_foreground_privilege();
             log_diagnostics(hwnd);
             let mut msg = MSG::default();
             while GetMessageW(&mut msg, None, 0, 0).into() {
@@ -326,6 +337,7 @@ mod raw_input {
             }
         } else if msg == WM_TIMER {
             repair_registration(hwnd);
+            check_foreground_privilege();
             log_diagnostics(hwnd);
         } else if msg == windows::Win32::UI::WindowsAndMessaging::WM_INPUT_DEVICE_CHANGE {
             if let Some(pressed) = RAW_PRESSED_KEYS.get() {
@@ -602,6 +614,7 @@ mod raw_input {
         process_elevation: &'static str,
         capture_enabled: bool,
         raw_keyboard_primary: bool,
+        elevated_foreground_seen: bool,
         keyboard_registration: &'static str,
         mouse_registration: &'static str,
         raw_input_messages: u64,
@@ -636,6 +649,7 @@ mod raw_input {
             process_elevation: process_elevation(),
             capture_enabled: capture_enabled(),
             raw_keyboard_primary: USE_RAW_KEYBOARD.load(Ordering::Acquire),
+            elevated_foreground_seen: ELEVATED_FOREGROUND_SEEN.load(Ordering::Acquire),
             keyboard_registration: registration(0x06),
             mouse_registration: registration(0x02),
             raw_input_messages: RAW_INPUT_MESSAGES.load(Ordering::Relaxed),
@@ -698,14 +712,20 @@ mod raw_input {
 
     fn process_elevation() -> &'static str {
         static VALUE: OnceLock<&'static str> = OnceLock::new();
-        VALUE.get_or_init(|| unsafe {
-            use windows::Win32::Foundation::HANDLE;
-            use windows::Win32::Security::{
-                GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
-            };
-            use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+        VALUE.get_or_init(|| {
+            elevation_for_process(unsafe { windows::Win32::System::Threading::GetCurrentProcess() })
+        })
+    }
+
+    fn elevation_for_process(process: windows::Win32::Foundation::HANDLE) -> &'static str {
+        use windows::Win32::Foundation::HANDLE;
+        use windows::Win32::Security::{
+            GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
+        };
+        use windows::Win32::System::Threading::OpenProcessToken;
+        unsafe {
             let mut token = HANDLE::default();
-            if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).is_err() {
+            if OpenProcessToken(process, TOKEN_QUERY, &mut token).is_err() {
                 return "unavailable";
             }
             let mut elevation = TOKEN_ELEVATION::default();
@@ -726,7 +746,40 @@ mod raw_input {
             } else {
                 "standard"
             }
-        })
+        }
+    }
+
+    // One sticky, session-only notice: switching back to our panel must not
+    // erase the warning about potentially incomplete totals. No per-key work,
+    // process injection, elevation request, or automatic pause is involved.
+    fn check_foreground_privilege() {
+        if ELEVATED_FOREGROUND_SEEN.load(Ordering::Acquire)
+            || !capture_enabled()
+            || process_elevation() != "standard"
+        {
+            return;
+        }
+        unsafe {
+            let mut pid = 0;
+            let foreground = GetForegroundWindow();
+            if foreground.0.is_null()
+                || GetWindowThreadProcessId(foreground, Some(&mut pid)) == 0
+                || pid == 0
+            {
+                return;
+            }
+            let Ok(process) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
+                return;
+            };
+            let elevated = elevation_for_process(process) == "elevated";
+            let _ = CloseHandle(process);
+            if elevated {
+                ELEVATED_FOREGROUND_SEEN.store(true, Ordering::Release);
+                if let Some(sender) = NOTICE_SENDER.get() {
+                    let _ = sender.try_send(CaptureNotice::ElevatedForegroundObserved);
+                }
+            }
+        }
     }
     #[allow(clippy::too_many_arguments)]
     fn emit_event(
@@ -1334,6 +1387,7 @@ mod raw_input {
         _tx: SyncSender<InputEvent>,
         _enabled: Arc<AtomicBool>,
         _diagnostics: Option<std::path::PathBuf>,
+        _notices: SyncSender<CaptureNotice>,
     ) {
         thread::park();
     }
