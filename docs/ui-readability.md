@@ -111,3 +111,24 @@ Remove-Item Env:KB_COUNT_BACKGROUND_ONLY
 本轮最终 `cargo fmt --all -- --check`、`cargo check --locked --offline`、`cargo clippy --all-targets --locked --offline -- -D warnings` 均通过；完整 `cargo test --locked --offline` 为 56 项通过、0 失败，56.31 秒，保留所有原有交互与缩放回归。实现及回归提交为 `8ad221a`，仅本地提交，未推送。
 
 `cargo build --release --locked --offline` 成功，耗时 3 分 40 秒。最新 `target/release/kb_count.exe` 于 2026-10-17 21:12:36（+08:00）生成，17,268,736 字节，SHA-256 `08EBA321CB503C6B47A7108DA2454A8D1829D145F4DDBA6A42E21C921BCF3A23`。PE 检查确认 x64、GUI 子系统、12 种图标及版本资源。上一版保存在 `target/release/kb_count.before-minimized-refresh-20261017-210856.exe`。没有更改持久化路径或数据结构，也没有自动启动采集器；本轮未进行真实桌面最小化过程的长期 CPU/内存测量。
+
+## CSV 日期范围快捷选择
+
+数据导出增加今天、近7天、近30天、本月、上月五项原生快捷按钮。近7/30天包含今天，本月从月初至今天，上月为完整自然月；按点击时的本地日期计算。预览使用规范日期并显示包含起止日的天数，不修改统计查询日期、日期草稿、应用筛选或趋势周期，也不会自动查询数据库或开始导出。手动输入和原有日历可以继续使用；导出文件名及后端查询采用解析后的规范日期，保留输入框草稿，不强制移动光标或重写输入。
+
+原实现只在保存对话框之前检查日期格式，起止顺序错误要等用户选择保存位置后才报错。现在界面实时检查格式、有效日期、1—9999 年及起止顺序，错误范围禁用导出。顺序颠倒但两端日期有效时提供“交换日期”；更改日期会清除已过期的导出结果提示。导出入口再次调用同一校验，在打开原生保存窗口之前拒绝无效范围，后端原有校验仍保留。界面没有新增计时器、后台查询或持久化配置。
+
+范围控制器处理 Slint 延后的字段变化通知：当日期仍对应当前快捷项时保留选中状态；准备导出只读取日期，不改写输入框，避免保存结果被随后排队的字段通知清空。快速选择只更新两个日期与预览，日期倒置时的交换和错误提示不挪动日期行及导出按钮。
+
+新增日期测试覆盖闰日、跨月、跨年、最近天数、完整上月、同一天及有效年份边界。界面专项使用软件渲染器检查 820×440、100%、125%、150%、175%、200% 的深浅主题实际点击，验证五项快捷按钮、无效范围按钮禁用、直接调用导出入口也不越过校验、交换后可导出、草稿保留与过期反馈清除。测试以计数回调代替保存对话框，不实际导出用户数据或操作系统前台。专项 1 项通过，46.11 秒；预览为 `target/ui-review/export-range-{缩放}-{light,dark}-{ready,invalid,valid}.bmp`。
+
+```powershell
+$env:KB_COUNT_EXPORT_ONLY = '1'
+$env:KB_COUNT_RENDER_UI = '1'
+cargo test --locked --offline ui_tests::refresh_preserves_ui_filters_and_privacy_state -- --exact
+Remove-Item Env:KB_COUNT_EXPORT_ONLY, Env:KB_COUNT_RENDER_UI
+```
+
+缩放后先完成布局帧再滚动及点选，截图开关不会替代实际布局。这里仍是离线缩放回归，真实 Windows 多屏 DPI 与系统文本缩放的验证边界不变。
+
+本轮最终 `cargo fmt --all -- --check`、`cargo check --locked --offline`、`cargo clippy --all-targets --locked --offline -- -D warnings` 均通过。关闭所有快捷检查与截图开关后，完整 `cargo test --locked --offline` 为 58 项通过、0 失败，88.46 秒，包含原有日历、趋势导航、最小化恢复、隐私、SQLite 和采集回归。

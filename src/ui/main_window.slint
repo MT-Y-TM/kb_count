@@ -75,6 +75,15 @@ export component MainWindow inherits Window {
     in property <string> theme_text;
     in-out property <string> export_from_date;
     in-out property <string> export_to_date;
+    in property <bool> export_range_valid;
+    in property <bool> export_range_reversed;
+    in property <string> export_range_status;
+    in property <int> export_preset_index: -1;
+    callback export_range_changed();
+    callback export_range_preset(int);
+    callback export_range_swap();
+    changed export_from_date => { root.export_range_changed(); }
+    changed export_to_date => { root.export_range_changed(); }
     in property <int> heat_q;
     in property <int> heat_1;
     in property <int> heat_2;
@@ -507,14 +516,25 @@ export component MainWindow inherits Window {
                                 Text { text: "数据导出"; font-size: 16px; font-weight: 600; color: root.ink; }
                                 Text { text: "导出选定日期范围的聚合统计，保存位置由你选择。"; color: root.muted; font-size: 12px; }
                                 HorizontalLayout { spacing: 8px;
+                                    Text { width: 48px; text: "快捷范围"; color: root.muted; font-size: 12px; vertical-alignment: center; }
+                                    ActionButton { width: 64px; text: "今天"; primary: root.export_preset_index == 0; clicked => { root.export_range_preset(0); } }
+                                    ActionButton { width: 64px; text: "近7天"; primary: root.export_preset_index == 1; clicked => { root.export_range_preset(1); } }
+                                    ActionButton { width: 72px; text: "近30天"; primary: root.export_preset_index == 2; clicked => { root.export_range_preset(2); } }
+                                    ActionButton { width: 64px; text: "本月"; primary: root.export_preset_index == 3; clicked => { root.export_range_preset(3); } }
+                                    ActionButton { width: 64px; text: "上月"; primary: root.export_preset_index == 4; clicked => { root.export_range_preset(4); } }
+                                    Rectangle { horizontal-stretch: 1; }
+                                    if root.export_range_reversed: ActionButton { width: 80px; text: "交换日期"; clicked => { root.export_range_swap(); } }
+                                }
+                                Text { min-height: 18px; text: root.export_range_status; color: root.export_range_valid ? root.muted : (root.dark_mode ? #efb1a5 : #9b463b); font-size: 12px; wrap: word-wrap; }
+                                HorizontalLayout { spacing: 8px;
                                     LineEdit { text <=> root.export_from_date; accessible-label: "导出开始日期，YYYY-MM-DD"; placeholder-text: "开始 YYYY-MM-DD"; }
                                     ActionButton { text: "选择"; accessible-label: "选择导出开始日期"; clicked => { root.calendar_requested(1); } }
                                     Text { text: "至"; color: root.muted; vertical-alignment: center; }
                                     LineEdit { text <=> root.export_to_date; accessible-label: "导出结束日期，YYYY-MM-DD"; placeholder-text: "结束 YYYY-MM-DD"; }
                                     ActionButton { text: "选择"; accessible-label: "选择导出结束日期"; clicked => { root.calendar_requested(2); } }
-                                    ActionButton { text: "导出 CSV"; clicked => { root.export_clicked(); } }
+                                    ActionButton { text: "导出 CSV"; enabled: root.export_range_valid; clicked => { root.export_clicked(); } }
                                 }
-                                Text { text: root.export_text; color: root.muted; font-size: 12px; wrap: word-wrap; }
+                                Text { min-height: 16px; text: root.export_text; color: root.muted; font-size: 12px; wrap: word-wrap; }
                             }
                         }
                         Rectangle { border-radius: 10px; border-width: 1px; border-color: root.line; background: root.surface;

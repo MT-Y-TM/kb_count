@@ -591,6 +591,168 @@ fn verify_background_refresh(ui: &MainWindow, events: &mpsc::Receiver<UiEvent>) 
     ui.hide().unwrap();
 }
 
+fn verify_export_ranges(ui: &MainWindow, window: &MinimalSoftwareWindow) {
+    let saves = Rc::new(std::cell::Cell::new(0));
+    let queries = Rc::new(std::cell::Cell::new(0));
+    ui.on_export_clicked({
+        let weak = ui.as_weak();
+        let saves = saves.clone();
+        move || {
+            if let Some(ui) = weak.upgrade()
+                && export_dates::prepare(&ui).is_some()
+            {
+                saves.set(saves.get() + 1);
+            }
+        }
+    });
+    ui.on_query_clicked({
+        let queries = queries.clone();
+        move || queries.set(queries.get() + 1)
+    });
+    ui.set_data_directory(r"D:\Portable\kb_count".into());
+    ui.set_clear_button_text("清空统计数据".into());
+    ui.set_version_text(env!("CARGO_PKG_VERSION").into());
+    ui.set_date_text("2024-02-29".into());
+    ui.set_query_date("2024-".into());
+    ui.show().unwrap();
+    let click = |x, y| {
+        let position = slint::LogicalPosition::new(x, y);
+        let button = slint::platform::PointerEventButton::Left;
+        ui.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerPressed { position, button });
+        ui.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerReleased { position, button });
+        render_frame(window);
+    };
+    for (label, scale, width, height) in [
+        ("100", 1.0, 1280, 720),
+        ("125", 1.25, 1280, 720),
+        ("150", 1.5, 1280, 720),
+        ("175", 1.75, 1680, 945),
+        ("200", 2.0, 1920, 1080),
+        ("minimum", 1.0, 820, 440),
+    ] {
+        window
+            .window()
+            .dispatch_event(slint::platform::WindowEvent::ScaleFactorChanged {
+                scale_factor: scale,
+            });
+        window.set_size(slint::PhysicalSize::new(width, height));
+        let logical_width = width as f32 / scale;
+        let logical_height = height as f32 / scale;
+        for dark in [false, true] {
+            ui.set_dark_mode(dark);
+            ui.set_selected_page(3);
+            ui.set_export_from_date("2024-02-01".into());
+            ui.set_export_to_date("2024-02-29".into());
+            render_frame(window);
+            ui.set_page_scroll_y(-10_000.0);
+            render_frame(window);
+            // Keep the complete CSV card in view above the storage section.
+            ui.set_page_scroll_y(ui.get_page_scroll_y() + 120.0);
+            render_frame(window);
+            let compact = ui.get_compact_layout();
+            let padding = if compact { 12.0 } else { 26.0 };
+            let gap = if compact { 10.0 } else { 18.0 };
+            let content_x = if logical_width < 960.0 { 129.0 } else { 169.0 } + padding;
+            let date_y = logical_height - padding - gap - 313.0 + 120.0;
+            let quick_y = date_y - 74.0;
+            save_preview(
+                window,
+                &format!(
+                    "export-range-{label}-{}-ready",
+                    if dark { "dark" } else { "light" }
+                ),
+            );
+            let saves_before = saves.get();
+            let queries_before = queries.get();
+            for (index, offset) in [(0, 108.0), (1, 180.0), (2, 256.0), (3, 332.0), (4, 404.0)] {
+                click(content_x + offset, quick_y);
+                assert_eq!(
+                    ui.get_export_preset_index(),
+                    index,
+                    "range button {index} at {label}%: {} to {}, scroll {}",
+                    ui.get_export_from_date(),
+                    ui.get_export_to_date(),
+                    ui.get_page_scroll_y()
+                );
+                assert!(ui.get_export_range_valid());
+            }
+            assert_eq!(
+                saves.get(),
+                saves_before,
+                "presets never open a save dialog"
+            );
+            assert_eq!(
+                queries.get(),
+                queries_before,
+                "presets never query statistics"
+            );
+            assert_eq!(ui.get_date_text(), "2024-02-29");
+            assert_eq!(ui.get_query_date(), "2024-");
+            ui.set_export_from_date("2024-03-01".into());
+            ui.set_export_to_date("2024-02-29".into());
+            render_frame(window);
+            assert!(!ui.get_export_range_valid());
+            assert!(ui.get_export_range_reversed());
+            click(logical_width - padding - 64.0, date_y);
+            assert_eq!(saves.get(), saves_before, "invalid button remains disabled");
+            ui.invoke_export_clicked();
+            assert_eq!(
+                saves.get(),
+                saves_before,
+                "action guard runs before the native dialog"
+            );
+            save_preview(
+                window,
+                &format!(
+                    "export-range-{label}-{}-invalid",
+                    if dark { "dark" } else { "light" }
+                ),
+            );
+            click(logical_width - padding - 66.0, quick_y);
+            assert_eq!(ui.get_export_from_date(), "2024-02-29");
+            assert_eq!(ui.get_export_to_date(), "2024-03-01");
+            assert!(ui.get_export_range_status().contains("2 天"));
+            click(logical_width - padding - 64.0, date_y);
+            assert_eq!(saves.get(), saves_before + 1);
+            ui.set_export_text("已导出：测试文件".into());
+            ui.set_export_to_date("bad date".into());
+            render_frame(window);
+            assert_eq!(
+                ui.get_export_text(),
+                "",
+                "editing clears stale export results"
+            );
+            assert!(!ui.get_export_range_valid());
+            ui.set_export_from_date(" 2024-2-28 ".into());
+            ui.set_export_to_date("2024-03-01".into());
+            ui.invoke_export_clicked();
+            assert_eq!(
+                ui.get_export_from_date(),
+                " 2024-2-28 ",
+                "export preserves the input draft"
+            );
+            assert!(ui.get_export_range_status().contains("2024-02-28"));
+            assert_eq!(ui.get_export_to_date(), "2024-03-01");
+            assert!(ui.get_export_range_status().contains("3 天"));
+            save_preview(
+                window,
+                &format!(
+                    "export-range-{label}-{}-valid",
+                    if dark { "dark" } else { "light" }
+                ),
+            );
+        }
+    }
+    window
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::ScaleFactorChanged { scale_factor: 1.0 });
+    window.set_size(slint::PhysicalSize::new(1060, 780));
+    ui.set_selected_page(0);
+    ui.set_page_scroll_y(0.0);
+}
+
 fn verify_ui_state() {
     let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
     let (event_sender, event_receiver) = mpsc::sync_channel::<UiEvent>(64);
@@ -614,6 +776,12 @@ fn verify_ui_state() {
         return;
     }
     date_picker::bind(&ui);
+    export_dates::bind(&ui);
+    verify_export_ranges(&ui, &window);
+    if std::env::var_os("KB_COUNT_EXPORT_ONLY").is_some() {
+        ui.hide().unwrap();
+        return;
+    }
     if std::env::var_os("KB_COUNT_ACTIVITY_ONLY").is_some() {
         verify_activity_and_close(&ui, &window);
         ui.hide().unwrap();
@@ -814,7 +982,14 @@ fn verify_ui_state() {
     let exports = Rc::new(std::cell::Cell::new(0));
     ui.on_export_clicked({
         let exports = exports.clone();
-        move || exports.set(exports.get() + 1)
+        let weak = ui.as_weak();
+        move || {
+            if let Some(ui) = weak.upgrade()
+                && export_dates::prepare(&ui).is_some()
+            {
+                exports.set(exports.get() + 1);
+            }
+        }
     });
     let app_queries = Rc::new(std::cell::Cell::new(0));
     ui.on_query_app_clicked({

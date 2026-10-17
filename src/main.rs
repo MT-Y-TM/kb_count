@@ -5,6 +5,7 @@ mod charts;
 mod collector;
 mod config;
 mod date_picker;
+mod export_dates;
 mod pie;
 mod stats;
 mod storage;
@@ -856,6 +857,7 @@ fn run() -> anyhow::Result<()> {
         }
     });
     date_picker::bind(&ui);
+    export_dates::bind(&ui);
     charts::bind(&ui, Arc::clone(&db));
     ui.on_exit_requested({
         let weak = ui.as_weak();
@@ -1342,14 +1344,11 @@ fn run() -> anyhow::Result<()> {
         let Some(ui) = ui_for_export.upgrade() else {
             return;
         };
-        let from = ui.get_export_from_date().to_string();
-        let to = ui.get_export_to_date().to_string();
-        if chrono::NaiveDate::parse_from_str(&from, "%Y-%m-%d").is_err()
-            || chrono::NaiveDate::parse_from_str(&to, "%Y-%m-%d").is_err()
-        {
-            ui.set_export_text("导出日期格式应为 YYYY-MM-DD".into());
+        let Some(range) = export_dates::prepare(&ui) else {
             return;
-        }
+        };
+        let from = range.from.to_string();
+        let to = range.to.to_string();
         let default_name = if from == to {
             format!("kb_count-{}.csv", from)
         } else {
