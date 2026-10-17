@@ -107,3 +107,7 @@ Remove-Item Env:KB_COUNT_BACKGROUND_ONLY
 ```
 
 该快捷检查通过 1 项，耗时 2.24 秒；正常完整测试仍需另行执行。这里验证查询及模型更新的行为，不将其换算为未经测量的 CPU 或内存下降百分比。
+
+本轮最终 `cargo fmt --all -- --check`、`cargo check --locked --offline`、`cargo clippy --all-targets --locked --offline -- -D warnings` 均通过；完整 `cargo test --locked --offline` 为 56 项通过、0 失败，56.31 秒，保留所有原有交互与缩放回归。实现及回归提交为 `8ad221a`，仅本地提交，未推送。
+
+`cargo build --release --locked --offline` 成功，耗时 3 分 40 秒。最新 `target/release/kb_count.exe` 于 2026-10-17 21:12:36（+08:00）生成，17,268,736 字节，SHA-256 `08EBA321CB503C6B47A7108DA2454A8D1829D145F4DDBA6A42E21C921BCF3A23`。PE 检查确认 x64、GUI 子系统、12 种图标及版本资源。上一版保存在 `target/release/kb_count.before-minimized-refresh-20261017-210856.exe`。没有更改持久化路径或数据结构，也没有自动启动采集器；本轮未进行真实桌面最小化过程的长期 CPU/内存测量。
