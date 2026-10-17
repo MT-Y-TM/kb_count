@@ -132,3 +132,5 @@ Remove-Item Env:KB_COUNT_EXPORT_ONLY, Env:KB_COUNT_RENDER_UI
 缩放后先完成布局帧再滚动及点选，截图开关不会替代实际布局。这里仍是离线缩放回归，真实 Windows 多屏 DPI 与系统文本缩放的验证边界不变。
 
 本轮最终 `cargo fmt --all -- --check`、`cargo check --locked --offline`、`cargo clippy --all-targets --locked --offline -- -D warnings` 均通过。关闭所有快捷检查与截图开关后，完整 `cargo test --locked --offline` 为 58 项通过、0 失败，88.46 秒，包含原有日历、趋势导航、最小化恢复、隐私、SQLite 和采集回归。
+
+功能提交 `0ae18b3`，仅本地提交，未推送。`cargo build --release --locked --offline` 成功，耗时 3 分 44 秒；最新 `target/release/kb_count.exe` 于 2026-10-17 21:35:47（+08:00）生成，17,377,280 字节，SHA-256 `71E867639106408783F13F7C1CE55256452186902E55A8DC0CB79DD7E3B62A77`。PE 校验确认 x64、GUI 子系统、12 种图标及版本资源。上一版保存在 `kb_count.before-export-ranges-20261017-213202.exe`；没有自动启动采集器或改动运行数据、配置格式及数据库结构。未将这些构建与离线回归结果视为真实 Windows 多屏 DPI 或资源占用测量。
