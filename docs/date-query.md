@@ -31,3 +31,5 @@ Remove-Item Env:KB_COUNT_QUERY_ONLY, Env:KB_COUNT_RENDER_UI
 ## 2026-10-18 验证结果
 
 Windows 11 本机锁定依赖离线执行：`cargo fmt --all -- --check`、`cargo check --locked --offline`、`cargo clippy --all-targets --locked --offline -- -D warnings` 均通过。清除全部专项与截图开关后，完整 `cargo test --locked --offline` 为 63 项通过、0 失败，117.03 秒，保留采集、隐私、存储、导出、日历、关闭偏好与各档缩放回归。另一次日期专项和截图运行 63 项通过，32.13 秒，界面用例提前结束。已查看最小窗口浅色无效日期、深色待查询、150% 浅色无效日期和 200% 深色数据库忙四张实际渲染。
+
+功能提交 `5ac8396`，仅本地提交，未推送。`cargo build --release --locked --offline` 成功，耗时 3 分 40 秒。`target/release/kb_count.exe` 于 2026-10-18 08:39:26（+08:00）生成，17,482,752 字节，SHA-256 `FAA2755C64ECB19BE1383843A344FBC2400897E178DEC85EEBFEBAA92C683C04`。PE 检查确认 x64、GUI 子系统、12 种内嵌图标及版本资源。上一版保留为 `target/release/kb_count.before-date-query-20261018-083546.exe`，备份校验值与上轮交付一致。没有自动启动采集器，也没有改动个人统计数据、配置格式或数据库 Schema；本轮未重新测量 Release CPU 与内存。
