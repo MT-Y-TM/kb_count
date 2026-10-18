@@ -134,3 +134,9 @@ Remove-Item Env:KB_COUNT_EXPORT_ONLY, Env:KB_COUNT_RENDER_UI
 本轮最终 `cargo fmt --all -- --check`、`cargo check --locked --offline`、`cargo clippy --all-targets --locked --offline -- -D warnings` 均通过。关闭所有快捷检查与截图开关后，完整 `cargo test --locked --offline` 为 58 项通过、0 失败，88.46 秒，包含原有日历、趋势导航、最小化恢复、隐私、SQLite 和采集回归。
 
 功能提交 `0ae18b3`，仅本地提交，未推送。`cargo build --release --locked --offline` 成功，耗时 3 分 44 秒；最新 `target/release/kb_count.exe` 于 2026-10-17 21:35:47（+08:00）生成，17,377,280 字节，SHA-256 `71E867639106408783F13F7C1CE55256452186902E55A8DC0CB79DD7E3B62A77`。PE 校验确认 x64、GUI 子系统、12 种图标及版本资源。上一版保存在 `kb_count.before-export-ranges-20261017-213202.exe`；没有自动启动采集器或改动运行数据、配置格式及数据库结构。未将这些构建与离线回归结果视为真实 Windows 多屏 DPI 或资源占用测量。
+
+## 2026-10-18：后台导出与取消
+
+CSV 查询和文件写入移出 Slint 回调，使用独立只读快照和流式输出，不持有统计写入连接的互斥锁。日期在导出期间固定，按钮提供取消及取消中状态；面板隐藏或最小化后继续任务，恢复时补上结果。文件先写入所选目录内的临时文件，取消或失败保留原目标。关闭提醒说明继续后台与退出取消的区别，现有关闭默认行为继续生效。
+
+完整测试 62 项通过、0 失败，90.54 秒；fmt、check、严格 Clippy 和 Release 构建均通过。已查看 820×440 与 200% 缩放深浅主题预览；新旧快照一致性、同时写入、取消、退出释放及文件保留也有回归。功能提交 `83a8bff`，新产物与 SHA-256、备份路径详见 [后台导出验证记录](csv-export.md)。不改动采集权限、默认便携路径或数据库 Schema，也没有自动启动采集器。

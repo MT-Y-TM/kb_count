@@ -36,3 +36,5 @@ Remove-Item Env:KB_COUNT_ASYNC_EXPORT_ONLY, Env:KB_COUNT_RENDER_UI
 ## 2026-10-18 验证结果
 
 Windows 11 本机、锁定依赖离线执行 `cargo fmt --all -- --check`、`cargo check --locked --offline`、`cargo clippy --all-targets --locked --offline -- -D warnings` 均通过。清除全部专项和截图开关后，完整测试 62 项通过、0 失败，90.54 秒，包含原有采集、隐私、数据库、日历、趋势及 100%—200% 缩放交互。另一次启用后台导出专项及截图的运行 62 项通过，12.23 秒；其中界面用例提前结束，不能替代上述完整测试。已实际查看最小窗口浅色与 200% 深色预览。
+
+功能提交 `83a8bff`，仅本地提交，未推送远端。`cargo build --release --locked --offline` 成功，耗时 3 分 57 秒；`target/release/kb_count.exe` 于 2026-10-18 08:27:26（+08:00）生成，17,463,296 字节，SHA-256 `95C772EED89488F8DDF469DEBC150C076612D49CADE90A8E4EB8A599CD7E6624`。`tools/verify_release.py` 确认 x64、GUI 子系统、12 种内嵌图标及版本资源。上一版保留为 `target/release/kb_count.before-async-export-20261018-082329.exe`。最终查看了两档尺寸各深浅主题的四张预览，没有自动重启采集器，没有改动个人统计、配置格式、数据库结构或默认便携路径。本轮未重新测量 Release 常驻内存和 CPU。
