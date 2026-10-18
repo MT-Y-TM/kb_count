@@ -753,6 +753,135 @@ fn verify_export_ranges(ui: &MainWindow, window: &MinimalSoftwareWindow) {
     ui.set_page_scroll_y(0.0);
 }
 
+fn verify_async_export(ui: &MainWindow, window: &MinimalSoftwareWindow) {
+    let controller = Rc::new(std::cell::RefCell::new(export_job::Controller::default()));
+    let dialogs = Rc::new(std::cell::Cell::new(0));
+    ui.on_export_clicked({
+        let weak = ui.as_weak();
+        let controller = controller.clone();
+        let dialogs = dialogs.clone();
+        move || {
+            let ui = weak.upgrade().unwrap();
+            let running = controller.borrow().is_running();
+            if running {
+                controller.borrow_mut().cancel(&ui);
+            } else if export_dates::prepare(&ui).is_some() {
+                dialogs.set(dialogs.get() + 1);
+            }
+        }
+    });
+    ui.set_data_directory(r"D:\Portable\kb_count".into());
+    ui.set_clear_button_text("清空统计数据".into());
+    ui.set_export_from_date("2024-02-01".into());
+    ui.set_export_to_date("2024-02-29".into());
+    ui.show().unwrap();
+    let finish = || {
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while controller.borrow().is_running() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "export completion remains responsive"
+            );
+            controller.borrow_mut().poll(ui);
+            thread::sleep(Duration::from_millis(5));
+        }
+    };
+    for (label, scale, width, height) in [("minimum", 1.0, 820, 440), ("200", 2.0, 1920, 1080)] {
+        window
+            .window()
+            .dispatch_event(slint::platform::WindowEvent::ScaleFactorChanged {
+                scale_factor: scale,
+            });
+        window.set_size(slint::PhysicalSize::new(width, height));
+        for dark in [false, true] {
+            ui.set_dark_mode(dark);
+            ui.set_selected_page(3);
+            render_frame(window);
+            ui.set_page_scroll_y(-10_000.0);
+            render_frame(window);
+            ui.set_page_scroll_y(ui.get_page_scroll_y() + 120.0);
+            render_frame(window);
+            let (started, resume) = export_job::controlled_test_job(&mut controller.borrow_mut());
+            started.recv_timeout(Duration::from_secs(2)).unwrap();
+            controller.borrow_mut().poll(ui);
+            render_frame(window);
+            assert!(ui.get_export_busy());
+            let before = ui.get_export_from_date();
+            ui.invoke_export_range_preset(0);
+            assert_eq!(
+                ui.get_export_from_date(),
+                before,
+                "active job dates are fixed"
+            );
+            assert!(export_dates::prepare(ui).is_none());
+            let padding = if ui.get_compact_layout() { 12.0 } else { 26.0 };
+            let gap = if ui.get_compact_layout() { 10.0 } else { 18.0 };
+            let position = slint::LogicalPosition::new(
+                width as f32 / scale - padding - 64.0,
+                height as f32 / scale - padding - gap - 313.0 + 120.0,
+            );
+            let button = slint::platform::PointerEventButton::Left;
+            ui.window()
+                .dispatch_event(slint::platform::WindowEvent::PointerPressed { position, button });
+            ui.window()
+                .dispatch_event(slint::platform::WindowEvent::PointerReleased { position, button });
+            render_frame(window);
+            assert!(
+                ui.get_export_cancelling(),
+                "cancel export is reachable at {label}"
+            );
+            assert_eq!(dialogs.get(), 0, "cancel must not open another save dialog");
+            save_preview(
+                window,
+                &format!(
+                    "async-export-{label}-{}",
+                    if dark { "dark" } else { "light" }
+                ),
+            );
+            resume.send(()).unwrap();
+            finish();
+            assert!(!ui.get_export_busy());
+            assert!(!ui.get_export_cancelling());
+            assert!(ui.get_export_text().contains("已取消"));
+        }
+    }
+    let (started, resume) = export_job::controlled_test_job(&mut controller.borrow_mut());
+    started.recv_timeout(Duration::from_secs(2)).unwrap();
+    controller.borrow_mut().poll(ui);
+    ui.hide().unwrap();
+    let before = ui.get_export_text();
+    resume.send(()).unwrap();
+    finish();
+    assert_eq!(
+        ui.get_export_text(),
+        before,
+        "hidden completion does not update UI"
+    );
+    assert!(ui.get_export_busy());
+    ui.show().unwrap();
+    controller.borrow_mut().poll(ui);
+    assert!(!ui.get_export_busy());
+    assert!(ui.get_export_text().contains("128 行"));
+    let (started, resume) = export_job::controlled_test_job(&mut controller.borrow_mut());
+    started.recv_timeout(Duration::from_secs(2)).unwrap();
+    controller.borrow_mut().poll(ui);
+    ui.window().set_minimized(true);
+    resume.send(()).unwrap();
+    finish();
+    assert!(ui.get_export_busy(), "minimized completion is deferred");
+    ui.window().set_minimized(false);
+    controller.borrow_mut().poll(ui);
+    assert!(!ui.get_export_busy());
+    assert!(ui.get_export_text().contains("128 行"));
+    controller.borrow_mut().shutdown();
+    window
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::ScaleFactorChanged { scale_factor: 1.0 });
+    window.set_size(slint::PhysicalSize::new(1060, 780));
+    ui.set_selected_page(0);
+    ui.set_page_scroll_y(0.0);
+}
+
 fn verify_ui_state() {
     let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
     let (event_sender, event_receiver) = mpsc::sync_channel::<UiEvent>(64);
@@ -777,6 +906,11 @@ fn verify_ui_state() {
     }
     date_picker::bind(&ui);
     export_dates::bind(&ui);
+    verify_async_export(&ui, &window);
+    if std::env::var_os("KB_COUNT_ASYNC_EXPORT_ONLY").is_some() {
+        ui.hide().unwrap();
+        return;
+    }
     verify_export_ranges(&ui, &window);
     if std::env::var_os("KB_COUNT_EXPORT_ONLY").is_some() {
         ui.hide().unwrap();

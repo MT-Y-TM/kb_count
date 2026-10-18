@@ -6,6 +6,7 @@ mod collector;
 mod config;
 mod date_picker;
 mod export_dates;
+mod export_job;
 mod pie;
 mod stats;
 mod storage;
@@ -1013,7 +1014,11 @@ fn run() -> anyhow::Result<()> {
     );
     let enabled_for_ui = Arc::clone(&enabled);
     let ui_for_state = ui.as_weak();
-    let db_for_export = Arc::clone(&db);
+    let export_database = dir.join("stats.db");
+    let export_controller =
+        std::rc::Rc::new(std::cell::RefCell::new(export_job::Controller::default()));
+    let export_action = export_controller.clone();
+    let choosing_export_path = std::rc::Rc::new(std::cell::Cell::new(false));
     #[cfg(not(windows))]
     let dir_for_export = dir.clone();
     let ui_for_export = ui.as_weak();
@@ -1344,6 +1349,11 @@ fn run() -> anyhow::Result<()> {
         let Some(ui) = ui_for_export.upgrade() else {
             return;
         };
+        let export_running = export_action.borrow().is_running();
+        if export_running {
+            export_action.borrow_mut().cancel(&ui);
+            return;
+        }
         let Some(range) = export_dates::prepare(&ui) else {
             return;
         };
@@ -1354,24 +1364,21 @@ fn run() -> anyhow::Result<()> {
         } else {
             format!("kb_count-{}-{}.csv", from, to)
         };
+        if choosing_export_path.replace(true) {
+            return;
+        }
         #[cfg(windows)]
-        let Some(path) = choose_csv_path(&default_name) else {
+        let path = choose_csv_path(&default_name);
+        #[cfg(not(windows))]
+        let path = Some(dir_for_export.join(default_name));
+        choosing_export_path.set(false);
+        let Some(path) = path else {
             ui.set_export_text("已取消导出".into());
             return;
         };
-        #[cfg(not(windows))]
-        let path = dir_for_export.join(default_name);
-        let text = match storage::export::export_range(
-            &db_for_export.lock().expect("database mutex poisoned"),
-            &from,
-            &to,
-            &path,
-        ) {
-            Ok(()) => format!("已导出：{}", path.display()),
-            Err(error) => format!("导出失败：{error}"),
-        };
-        tracing::info!(%text);
-        ui.set_export_text(text.into());
+        export_action
+            .borrow_mut()
+            .start(&ui, export_database.clone(), from, to, path);
     });
     let tray_enabled = Arc::clone(&enabled);
     let tray_ui = ui.as_weak();
@@ -1380,8 +1387,12 @@ fn run() -> anyhow::Result<()> {
     let tray_shutdown = writer_command_tx.clone();
     let tray_config = Arc::clone(&config_state);
     let tray_notices = capture_notices.clone();
+    let tray_exports = export_controller.clone();
     let tray_timer = Timer::default();
     tray_timer.start(TimerMode::Repeated, Duration::from_millis(250), move || {
+        if let Some(ui) = tray_ui.upgrade() {
+            tray_exports.borrow_mut().poll(&ui);
+        }
         let Some(command) = tray::take_request() else {
             return;
         };
@@ -1481,6 +1492,7 @@ fn run() -> anyhow::Result<()> {
     run_desktop_event_loop()?;
     drop(tray_timer);
     drop(refresh_timer);
+    export_controller.borrow_mut().shutdown();
     drop(writer_command_tx);
     let _ = writer_handle.join();
     if let Err(error) = db.lock().expect("database mutex poisoned").checkpoint() {

@@ -85,6 +85,9 @@ fn refresh(ui: &MainWindow) -> Option<DateRange> {
 
 // Revalidate at the action boundary, before opening a native save dialog.
 pub fn prepare(ui: &MainWindow) -> Option<DateRange> {
+    if ui.get_export_busy() {
+        return None;
+    }
     // Preserve the user's draft. The caller uses canonical dates for filenames
     // and storage, without queuing field-change callbacks after a save result.
     refresh(ui)
@@ -95,6 +98,9 @@ pub fn bind(ui: &MainWindow) {
         let weak = ui.as_weak();
         move || {
             if let Some(ui) = weak.upgrade() {
+                if ui.get_export_busy() {
+                    return;
+                }
                 ui.set_export_text("".into());
                 let selected = preset(ui.get_export_preset_index(), Local::now().date_naive());
                 let current = validate(&ui.get_export_from_date(), &ui.get_export_to_date()).ok();
@@ -111,6 +117,9 @@ pub fn bind(ui: &MainWindow) {
             if let (Some(ui), Some(range)) =
                 (weak.upgrade(), preset(index, Local::now().date_naive()))
             {
+                if ui.get_export_busy() {
+                    return;
+                }
                 ui.set_export_from_date(range.from.to_string().into());
                 ui.set_export_to_date(range.to.to_string().into());
                 ui.set_export_preset_index(index);
@@ -123,6 +132,7 @@ pub fn bind(ui: &MainWindow) {
         let weak = ui.as_weak();
         move || {
             if let Some(ui) = weak.upgrade()
+                && !ui.get_export_busy()
                 && let (Some(from), Some(to)) = (
                     parse(&ui.get_export_from_date()),
                     parse(&ui.get_export_to_date()),
