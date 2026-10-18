@@ -13,10 +13,7 @@ struct Calendar {
 
 impl Calendar {
     fn new(text: &str, today: NaiveDate, target: i32) -> Self {
-        let selected = NaiveDate::parse_from_str(text, "%Y-%m-%d")
-            .ok()
-            .filter(|date| (1..=9999).contains(&date.year()))
-            .unwrap_or(today);
+        let selected = crate::query_dates::parse(text).unwrap_or(today);
         Self {
             selected,
             month: selected.with_day(1).expect("first day"),
@@ -159,9 +156,7 @@ pub fn bind(ui: &MainWindow) {
         let weak = ui.as_weak();
         let state = state.clone();
         move |text| {
-            if let (Some(ui), Ok(date)) =
-                (weak.upgrade(), NaiveDate::parse_from_str(&text, "%Y-%m-%d"))
-            {
+            if let (Some(ui), Some(date)) = (weak.upgrade(), crate::query_dates::parse(&text)) {
                 state.borrow().apply(&ui, date);
             }
         }

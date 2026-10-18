@@ -753,6 +753,179 @@ fn verify_export_ranges(ui: &MainWindow, window: &MinimalSoftwareWindow) {
     ui.set_page_scroll_y(0.0);
 }
 
+fn verify_query_dates(ui: &MainWindow, window: &MinimalSoftwareWindow) {
+    use crate::storage::history::sample;
+    let mut database = storage::database::Database::open(std::path::Path::new(":memory:")).unwrap();
+    let today = Local::now().date_naive();
+    let yesterday = today - chrono::Duration::days(1);
+    database
+        .record_batch(&[
+            sample("2024-02-28", None, "Unknown", "key", 7),
+            sample("2024-02-29", None, "Unknown", "key", 41),
+            sample(&today.to_string(), None, "Unknown", "key", 17),
+            sample(&yesterday.to_string(), None, "Unknown", "key", 19),
+        ])
+        .unwrap();
+    let database = Arc::new(Mutex::new(database));
+    query_dates::bind(
+        ui,
+        database.clone(),
+        Arc::new(Mutex::new(RankingSort::Total)),
+    );
+    ui.set_detail_loaded(false);
+    ui.set_heatmap_scope(0);
+    ui.set_app_search("".into());
+    ui.set_selected_page(0);
+    ui.set_version_text(env!("CARGO_PKG_VERSION").into());
+    ui.show().unwrap();
+    for (label, scale, width, height) in [
+        ("100", 1.0, 1280, 720),
+        ("125", 1.25, 1280, 720),
+        ("150", 1.5, 1280, 720),
+        ("175", 1.75, 1680, 945),
+        ("200", 2.0, 1920, 1080),
+        ("minimum", 1.0, 820, 440),
+    ] {
+        window
+            .window()
+            .dispatch_event(slint::platform::WindowEvent::ScaleFactorChanged {
+                scale_factor: scale,
+            });
+        window.set_size(slint::PhysicalSize::new(width, height));
+        for dark in [false, true] {
+            ui.set_dark_mode(dark);
+            refresh_overview(
+                ui,
+                &database.lock().unwrap(),
+                "2024-02-28",
+                RankingSort::Total,
+            )
+            .unwrap();
+            ui.set_query_date("2024-02-30".into());
+            render_frame(window);
+            assert!(!ui.get_query_date_valid());
+            assert!(ui.get_query_date_hint().contains("有效日期"));
+            let logical_width = width as f32 / scale;
+            let padding = if ui.get_compact_layout() { 12.0 } else { 26.0 };
+            let content_x = if logical_width < 960.0 { 129.0 } else { 169.0 } + padding;
+            let position = slint::LogicalPosition::new(
+                content_x + 288.0,
+                if ui.get_compact_layout() { 82.0 } else { 116.0 },
+            );
+            let click = || {
+                let button = slint::platform::PointerEventButton::Left;
+                ui.window()
+                    .dispatch_event(slint::platform::WindowEvent::PointerPressed {
+                        position,
+                        button,
+                    });
+                ui.window()
+                    .dispatch_event(slint::platform::WindowEvent::PointerReleased {
+                        position,
+                        button,
+                    });
+                render_frame(window);
+            };
+            click();
+            {
+                let _guard = database.lock().unwrap();
+                ui.invoke_query_clicked();
+                assert!(
+                    !ui.get_query_date_failed(),
+                    "invalid drafts never try the database"
+                );
+            }
+            assert_eq!(ui.get_date_text(), "2024-02-28");
+            assert_eq!(ui.get_keyboard_text(), "7");
+            let theme = if dark { "dark" } else { "light" };
+            save_preview(window, &format!("query-date-{label}-{theme}-invalid"));
+            ui.set_query_date(" 2024-2-29 ".into());
+            render_frame(window);
+            assert!(ui.get_query_date_valid());
+            assert!(ui.get_query_date_pending());
+            assert_eq!(ui.get_keyboard_text(), "7", "editing does not query");
+            save_preview(window, &format!("query-date-{label}-{theme}-pending"));
+            click();
+            assert_eq!(
+                ui.get_date_text(),
+                "2024-02-29",
+                "canonical date queried at {label}"
+            );
+            assert_eq!(ui.get_query_date(), "2024-02-29");
+            assert_eq!(
+                ui.get_keyboard_text(),
+                "41",
+                "non-padded input must find stored rows"
+            );
+            assert!(!ui.get_query_date_pending());
+            assert!(!ui.get_query_date_failed());
+            ui.set_query_date("2024-02-28".into());
+            let guard = database.lock().unwrap();
+            // Intentionally invoke before changed handlers run. The failure
+            // must survive their later delivery for this very same draft.
+            ui.invoke_query_clicked();
+            render_frame(window);
+            assert!(ui.get_query_date_failed());
+            assert!(ui.get_query_date_hint().contains("正在保存"));
+            assert_eq!(ui.get_date_text(), "2024-02-29");
+            assert_eq!(ui.get_keyboard_text(), "41");
+            save_preview(window, &format!("query-date-{label}-{theme}-busy"));
+            ui.set_query_date("2024-".into());
+            render_frame(window);
+            assert!(
+                !ui.get_query_date_failed(),
+                "editing clears an obsolete failure"
+            );
+            assert!(!ui.get_query_date_valid());
+            drop(guard);
+            ui.set_query_date("2024-02-28".into());
+            ui.invoke_query_clicked();
+            render_frame(window);
+            assert_eq!(ui.get_date_text(), "2024-02-28");
+            assert_eq!(ui.get_keyboard_text(), "7");
+            assert!(!ui.get_query_date_failed());
+        }
+    }
+    ui.set_query_date(" 2024-2-29 ".into());
+    ui.invoke_calendar_requested(0);
+    assert_eq!(ui.get_calendar_selection(), "2024-02-29");
+    ui.invoke_calendar_chosen("0000-01-01".into());
+    assert!(
+        ui.get_calendar_open(),
+        "out-of-range calendar input is rejected"
+    );
+    ui.invoke_calendar_chosen("2024-02-29".into());
+    assert!(!ui.get_calendar_open());
+    assert_eq!(ui.get_keyboard_text(), "41");
+    ui.invoke_today_clicked();
+    assert_eq!(ui.get_date_text(), today.to_string());
+    assert_eq!(ui.get_keyboard_text(), "17");
+    ui.invoke_yesterday_clicked();
+    assert_eq!(ui.get_date_text(), yesterday.to_string());
+    assert_eq!(ui.get_keyboard_text(), "19");
+    for text in ["0000-01-01", "+10000-01-01", "2023-02-29"] {
+        ui.set_query_date(text.into());
+        ui.invoke_query_clicked();
+        assert_eq!(ui.get_date_text(), yesterday.to_string());
+        assert_eq!(ui.get_keyboard_text(), "19");
+    }
+    charts::bind(ui, database);
+    ui.set_query_date("2024-02-28".into());
+    ui.invoke_query_clicked();
+    ui.set_trend_period(0);
+    ui.set_selected_page(4);
+    render_frame(window);
+    ui.invoke_chart_period_shift(1);
+    assert_eq!(ui.get_date_text(), "2024-02-29");
+    assert_eq!(ui.get_keyboard_text(), "41");
+    assert!(ui.get_trend_summary().contains("41"));
+    window
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::ScaleFactorChanged { scale_factor: 1.0 });
+    window.set_size(slint::PhysicalSize::new(1060, 780));
+    ui.set_selected_page(0);
+}
+
 fn verify_async_export(ui: &MainWindow, window: &MinimalSoftwareWindow) {
     let controller = Rc::new(std::cell::RefCell::new(export_job::Controller::default()));
     let dialogs = Rc::new(std::cell::Cell::new(0));
@@ -906,6 +1079,11 @@ fn verify_ui_state() {
     }
     date_picker::bind(&ui);
     export_dates::bind(&ui);
+    verify_query_dates(&ui, &window);
+    if std::env::var_os("KB_COUNT_QUERY_ONLY").is_some() {
+        ui.hide().unwrap();
+        return;
+    }
     verify_async_export(&ui, &window);
     if std::env::var_os("KB_COUNT_ASYNC_EXPORT_ONLY").is_some() {
         ui.hide().unwrap();
@@ -1181,6 +1359,8 @@ fn verify_ui_state() {
         assert_eq!(pauses.get(), before + 1, "pause remains usable at {label}%");
         let content_x = if narrow { 129.0 } else { 169.0 } + if compact { 12.0 } else { 26.0 };
         let before = queries.get();
+        ui.set_query_date(date.into());
+        render_frame(&window);
         click(content_x + 288.0, if compact { 82.0 } else { 116.0 });
         assert_eq!(queries.get(), before + 1, "date query at {label}%");
         let logical_height = height as f32 / scale;

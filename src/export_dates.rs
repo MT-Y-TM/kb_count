@@ -27,9 +27,7 @@ impl RangeError {
 }
 
 fn parse(text: &str) -> Option<NaiveDate> {
-    NaiveDate::parse_from_str(text.trim(), "%Y-%m-%d")
-        .ok()
-        .filter(|date| (1..=9999).contains(&date.year()))
+    crate::query_dates::parse(text)
 }
 
 fn validate(from: &str, to: &str) -> Result<DateRange, RangeError> {

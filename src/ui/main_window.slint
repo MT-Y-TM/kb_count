@@ -145,6 +145,13 @@ export component MainWindow inherits Window {
     in property <int> heat_right_alt;
     in property <int> heat_space;
     in-out property <string> query_date;
+    in property <bool> query_date_valid;
+    in property <bool> query_date_pending;
+    in property <bool> query_date_failed;
+    in property <string> query_date_hint;
+    callback query_date_changed();
+    changed query_date => { root.query_date_changed(); }
+    changed date_text => { root.query_date_changed(); }
     in-out property <bool> calendar_open;
     in property <string> calendar_month;
     in property <string> calendar_caption;
@@ -306,10 +313,12 @@ export component MainWindow inherits Window {
                     ActionButton { text: "昨日"; clicked => { root.yesterday_clicked(); } }
                     Rectangle { width: 1px; background: root.line; }
                     LineEdit { width: 124px; text <=> root.query_date; accessible-label: "统计日期，YYYY-MM-DD"; placeholder-text: "YYYY-MM-DD"; accepted => { root.query_clicked(); } }
-                    ActionButton { text: "查询"; clicked => { root.query_clicked(); } }
+                    ActionButton { text: "查询"; enabled: root.query_date_valid; primary: root.query_date_valid && root.query_date_pending; clicked => { root.query_clicked(); } }
                     ActionButton { text: "选日期"; clicked => { root.calendar_requested(0); } }
-                    Rectangle { horizontal-stretch: 1; }
-                    Text { text: root.date_text; color: root.muted; font-size: 12px; vertical-alignment: center; }
+                    VerticalLayout { horizontal-stretch: 1; min-width: 140px; spacing: 0px;
+                        Text { height: 16px; text: "显示 " + root.date_text; color: root.ink; font-size: 12px; overflow: elide; }
+                        Text { height: 16px; text: root.query_date_hint; color: !root.query_date_valid || root.query_date_failed ? (root.dark_mode ? #efb1a5 : #9b463b) : root.muted; font-size: 11px; overflow: elide; }
+                    }
                 }
             }
             Rectangle {

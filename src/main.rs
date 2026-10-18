@@ -8,6 +8,7 @@ mod date_picker;
 mod export_dates;
 mod export_job;
 mod pie;
+mod query_dates;
 mod stats;
 mod storage;
 mod tray;
@@ -1022,69 +1023,7 @@ fn run() -> anyhow::Result<()> {
     #[cfg(not(windows))]
     let dir_for_export = dir.clone();
     let ui_for_export = ui.as_weak();
-    let db_for_date = Arc::clone(&db);
-    let ui_for_date = ui.as_weak();
-    ui.on_today_clicked({
-        let db = Arc::clone(&db_for_date);
-        let ui = ui_for_date.clone();
-        let sort = Arc::clone(&sort_state);
-        move || {
-            let date = Local::now().format("%Y-%m-%d").to_string();
-            if let Some(ui) = ui.upgrade() {
-                let database = db.lock().expect("database mutex poisoned");
-                let _ = refresh_overview(
-                    &ui,
-                    &database,
-                    &date,
-                    *sort.lock().expect("ranking state poisoned"),
-                );
-            }
-        }
-    });
-    ui.on_yesterday_clicked({
-        let db = db_for_date;
-        let ui = ui_for_date;
-        let sort = Arc::clone(&sort_state);
-        move || {
-            let date = (Local::now() - chrono::Duration::days(1))
-                .format("%Y-%m-%d")
-                .to_string();
-            if let Some(ui) = ui.upgrade() {
-                let database = db.lock().expect("database mutex poisoned");
-                let _ = refresh_overview(
-                    &ui,
-                    &database,
-                    &date,
-                    *sort.lock().expect("ranking state poisoned"),
-                );
-            }
-        }
-    });
-    let db_for_query = Arc::clone(&db);
-    let ui_for_query = ui.as_weak();
-    let sort_for_query = Arc::clone(&sort_state);
-    ui.on_query_clicked(move || {
-        let Some(ui) = ui_for_query.upgrade() else {
-            return;
-        };
-        let date = ui.get_query_date().to_string();
-        if chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d").is_err() {
-            ui.set_status_text("日期格式应为 YYYY-MM-DD".into());
-            return;
-        }
-        let database = db_for_query.lock().expect("database mutex poisoned");
-        match refresh_overview(
-            &ui,
-            &database,
-            &date,
-            *sort_for_query.lock().expect("ranking state poisoned"),
-        ) {
-            Ok(()) => {
-                ui.set_status_text("已查询指定日期".into());
-            }
-            Err(error) => ui.set_status_text(format!("查询失败：{error}").into()),
-        }
-    });
+    query_dates::bind(&ui, Arc::clone(&db), Arc::clone(&sort_state));
     let db_for_sort = Arc::clone(&db);
     let ui_for_sort = ui.as_weak();
     let sort_for_keyboard = Arc::clone(&sort_state);
