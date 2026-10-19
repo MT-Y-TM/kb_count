@@ -165,6 +165,35 @@ export component MainWindow inherits Window {
     in-out property <string> detail_path;
     in-out property <string> app_query_path;
     in-out property <string> policy_path;
+    in-out property <bool> policy_picker_open;
+    in-out property <string> policy_search;
+    in property <[ChartApp]> policy_apps;
+    in property <int> policy_filter;
+    in property <int> policy_mode: -1;
+    in property <bool> policy_manual;
+    in property <bool> policy_path_valid;
+    in property <bool> policy_ready;
+    in property <string> policy_mode_label;
+    in property <string> policy_feedback;
+    in-out property <bool> policy_reveal;
+    property <bool> policy_page_ready;
+    property <bool> policy_layout_ready;
+    out property <length> policy_section_y;
+    function reveal-policy-if-ready() {
+        if root.policy_reveal && root.policy_page_ready && root.policy_layout_ready && root.selected_page == 3 {
+            root.page_scroll_y = -root.policy_section_y;
+            root.policy_reveal = false;
+        }
+    }
+    callback policy_editor_requested();
+    callback policy_path_changed();
+    callback policy_picker_requested();
+    callback policy_app_chosen(string);
+    callback policy_search_changed();
+    callback policy_filter_selected(int);
+    callback policy_reset_clicked();
+    changed policy_path => { root.policy_path_changed(); }
+    changed policy_search => { root.policy_search_changed(); }
     in-out property <bool> dark_mode;
     callback pause_clicked();
     callback export_clicked();
@@ -238,6 +267,14 @@ export component MainWindow inherits Window {
         root.page_scroll_y = 0px;
         root.calendar_open = false;
         root.app_picker_open = false;
+        root.policy_picker_open = false;
+        if root.selected_page == 3 {
+            root.policy_page_ready = true;
+            root.policy_editor_requested();
+            root.reveal-policy-if-ready();
+        } else {
+            root.policy_page_ready = false; root.policy_layout_ready = false; root.policy_reveal = false;
+        }
         if root.selected_page == 4 { root.charts_requested(); }
         if root.selected_page != 3 { root.clear_cancel_clicked(); }
     }
@@ -477,7 +514,11 @@ export component MainWindow inherits Window {
                         HorizontalLayout { spacing: 8px;
                             LineEdit { text <=> root.app_query_path; placeholder-text: "也可以输入应用完整路径"; accepted => { root.query_app_clicked(); } }
                             ActionButton { text: "查询应用"; clicked => { root.query_app_clicked(); } }
-                            ActionButton { text: "管理采集策略"; enabled: root.detail_loaded; clicked => { root.policy_path = root.detail_path; root.selected_page = 3; } }
+                            ActionButton { text: "管理采集策略"; enabled: root.detail_loaded; clicked => {
+                                root.policy_path = root.detail_path;
+                                root.policy_page_ready = false; root.policy_layout_ready = false;
+                                root.policy_reveal = true; root.selected_page = 3;
+                            } }
                         }
                         Text { text: root.detail_text; color: root.muted; font-size: 12px; wrap: word-wrap; }
                     }
@@ -506,20 +547,40 @@ export component MainWindow inherits Window {
                                 }
                                 Text { min-height: 32px; text: root.close_preferences_status != "" ? root.close_preferences_status : "当前：" + root.close_summary + "。可取消记住，恢复每次询问。"; color: root.muted; font-size: 12px; wrap: word-wrap; }
                                 Text { min-height: 32px; text: "采集范围：管理员或受保护应用中的输入可能无法统计。未采集到不代表没有操作。"; color: root.muted; font-size: 12px; wrap: word-wrap; }
+                                if root.settings_text != "": Text { text: root.settings_text; color: root.muted; font-size: 12px; wrap: word-wrap; }
                             }
                         }
-                        Rectangle { border-radius: 10px; border-width: 1px; border-color: root.line; background: root.surface;
+                        policy-card := Rectangle { border-radius: 10px; border-width: 1px; border-color: root.line; background: root.surface;
+                            init => {
+                                root.policy_section_y = self.y;
+                                root.policy_layout_ready = self.y > 0px;
+                                root.reveal-policy-if-ready();
+                            }
+                            changed y => {
+                                root.policy_section_y = self.y;
+                                root.policy_layout_ready = self.y > 0px;
+                                root.reveal-policy-if-ready();
+                            }
                             VerticalLayout { padding: 20px; spacing: 12px;
                                 Text { text: "应用采集策略"; font-size: 16px; font-weight: 600; color: root.ink; }
                                 Text { text: "普通应用默认详细统计；浏览器仅统计总量；已知密码管理器默认排除。"; color: root.muted; font-size: 12px; wrap: word-wrap; }
-                                LineEdit { text <=> root.policy_path; placeholder-text: "应用完整路径 · 可从应用详情自动带入"; }
                                 HorizontalLayout { spacing: 8px;
-                                    ActionButton { text: "详细统计"; clicked => { root.policy_detailed_clicked(); } }
-                                    ActionButton { text: "仅统计总量"; clicked => { root.policy_totals_clicked(); } }
-                                    ActionButton { text: "排除此应用"; clicked => { root.policy_excluded_clicked(); } }
+                                    LineEdit { text <=> root.policy_path; accessible-label: "应用采集策略的完整路径"; placeholder-text: "应用完整路径 · 可从应用详情自动带入"; }
+                                    ActionButton { width: 96px; text: "选择应用"; clicked => { root.policy_picker_requested(); } }
+                                }
+                                HorizontalLayout { spacing: 8px;
+                                    Text { horizontal-stretch: 1; text: root.policy_mode_label; color: root.muted; font-size: 12px; vertical-alignment: center; }
+                                    ActionButton { text: "重新读取"; clicked => { root.policy_editor_requested(); } }
+                                }
+                                HorizontalLayout { spacing: 8px;
+                                    ActionButton { width: 96px; text: "详细统计"; enabled: root.policy_ready && root.policy_path_valid; primary: root.policy_mode == 0; clicked => { root.policy_detailed_clicked(); } }
+                                    ActionButton { width: 104px; text: "仅统计总量"; enabled: root.policy_ready && root.policy_path_valid; primary: root.policy_mode == 1; clicked => { root.policy_totals_clicked(); } }
+                                    ActionButton { width: 104px; text: "排除此应用"; enabled: root.policy_ready && root.policy_path_valid; primary: root.policy_mode == 2; clicked => { root.policy_excluded_clicked(); } }
+                                    Rectangle { horizontal-stretch: 1; }
+                                    ActionButton { width: 88px; text: "恢复默认"; enabled: root.policy_ready && root.policy_path_valid && root.policy_manual; clicked => { root.policy_reset_clicked(); } }
                                 }
                                 Text { text: root.policies_text; color: root.muted; font-size: 12px; wrap: word-wrap; }
-                                Text { text: root.settings_text; color: root.dark_mode ? #aec5ea : #5f7da8; font-size: 12px; wrap: word-wrap; }
+                                Text { min-height: 32px; text: root.policy_feedback; color: root.dark_mode ? #aec5ea : #5f7da8; font-size: 12px; wrap: word-wrap; }
                             }
                         }
                         Rectangle { border-radius: 10px; border-width: 1px; border-color: root.line; background: root.surface;
@@ -599,6 +660,19 @@ export component MainWindow inherits Window {
             active: root.app_picker_open; dark: root.dark_mode; search <=> root.chart_app_search; apps: root.chart_apps;
             chosen(path) => { root.chart_app_chosen(path); }
             dismissed => { root.app_picker_open = false; }
+        }
+    }
+    Rectangle {
+        width: 100%; height: 100%; visible: root.policy_picker_open; background: #101b2c88;
+        TouchArea { clicked => { root.policy_picker_open = false; } scroll-event => { return accept; } }
+        AppPicker {
+            x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+            active: root.policy_picker_open; dark: root.dark_mode; search <=> root.policy_search; apps: root.policy_apps;
+            caption: "选择采集策略应用 · 历史记录与手动策略";
+            filters: ["全部", "手动策略", "已排除"]; filter_index: root.policy_filter;
+            filter-selected(index) => { root.policy_filter_selected(index); }
+            chosen(path) => { root.policy_app_chosen(path); }
+            dismissed => { root.policy_picker_open = false; }
         }
     }
     Rectangle {

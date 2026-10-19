@@ -8,6 +8,7 @@ mod date_picker;
 mod export_dates;
 mod export_job;
 mod pie;
+mod policy_editor;
 mod query_dates;
 mod stats;
 mod storage;
@@ -165,20 +166,6 @@ fn display_input_code(code: &str) -> String {
         _ => return code.to_string(),
     };
     name.to_string()
-}
-
-fn policy_summary(database: &storage::database::Database) -> String {
-    match database.policy_rows() {
-        Ok(rows) if rows.is_empty() => {
-            "当前没有手动应用策略（浏览器和密码管理器使用默认策略）".to_string()
-        }
-        Ok(rows) => rows
-            .into_iter()
-            .map(|(path, mode)| format!("{}: {}", path, mode.as_str()))
-            .collect::<Vec<_>>()
-            .join("\n"),
-        Err(error) => format!("无法读取应用策略：{error}"),
-    }
 }
 
 #[cfg(windows)]
@@ -476,6 +463,7 @@ fn bind_panel_close(
             }
             ui.set_calendar_open(false);
             ui.set_app_picker_open(false);
+            ui.set_policy_picker_open(false);
             ui.invoke_clear_cancel_clicked();
             ui.set_close_error("".into());
             let (action, remember) = preferences.get();
@@ -983,8 +971,6 @@ fn run() -> anyhow::Result<()> {
         .ok()
         .and_then(|exe| config::startup::windows::is_configured(&exe).ok())
         .unwrap_or(false);
-    let initial_policy_summary = policy_summary(&db.lock().expect("database mutex poisoned"));
-    ui.set_policies_text(initial_policy_summary.into());
     ui.set_settings_text(
         if cfg.start_with_windows && !startup_matches {
             "启动项路径与当前 EXE 不一致，请重新启用。"
@@ -1092,48 +1078,7 @@ fn run() -> anyhow::Result<()> {
             }
         }
     });
-    let db_for_policy = Arc::clone(&db);
-    let ui_for_policy = ui.as_weak();
-    let set_policy = Arc::new(move |mode: CaptureMode| {
-        if let Some(ui) = ui_for_policy.upgrade() {
-            let path = ui.get_policy_path().to_string();
-            if path.trim().is_empty() {
-                ui.set_settings_text("请输入应用完整路径后设置采集策略。".into());
-            } else {
-                let database = db_for_policy.lock().expect("database mutex poisoned");
-                let result = database.set_policy(path.trim(), mode.as_str());
-                match result {
-                    Ok(()) => {
-                        ui.set_settings_text("应用采集策略已更新。".into());
-                        ui.set_policies_text(policy_summary(&database).into());
-                        let date = ui.get_date_text().to_string();
-                        if ui.get_detail_loaded() {
-                            let _ = refresh_detail(
-                                &ui,
-                                &database,
-                                &date,
-                                ui.get_detail_path().as_str(),
-                            );
-                        }
-                        let _ = refresh_heatmap(&ui, &database, &date);
-                    }
-                    Err(error) => ui.set_settings_text(format!("设置策略失败：{error}").into()),
-                }
-            }
-        }
-    });
-    ui.on_policy_detailed_clicked({
-        let set_policy = Arc::clone(&set_policy);
-        move || set_policy(CaptureMode::Detailed)
-    });
-    ui.on_policy_totals_clicked({
-        let set_policy = Arc::clone(&set_policy);
-        move || set_policy(CaptureMode::TotalsOnly)
-    });
-    ui.on_policy_excluded_clicked({
-        let set_policy = Arc::clone(&set_policy);
-        move || set_policy(CaptureMode::Excluded)
-    });
+    policy_editor::bind(&ui, Arc::clone(&db));
     let heatmap_ui = ui.as_weak();
     let heatmap_db = Arc::clone(&db);
     let refresh_scope = Arc::new(move || {

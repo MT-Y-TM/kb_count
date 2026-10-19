@@ -8,7 +8,7 @@ export struct ActivityCell { date: string, value: string, level: int, week: int,
 export struct TrendSeries { label: string, tint: color, commands: string, source: image, shown: bool }
 export struct TrendPoint { label: string, description: string }
 export struct TrendTick { position: float, label: string }
-export struct ChartApp { name: string, path: string }
+export struct ChartApp { name: string, path: string, note: string }
 
 component SeriesToggle inherits Rectangle {
     in property <string> label;
@@ -177,6 +177,10 @@ export component AppPicker inherits Rectangle {
     in property <bool> active;
     in-out property <string> search;
     in property <[ChartApp]> apps;
+    in property <string> caption: "选择应用 · 包含历史应用";
+    in property <[string]> filters;
+    in property <int> filter_index;
+    callback filter-selected(int);
     callback chosen(string);
     callback dismissed();
     width: 600px; height: 392px;
@@ -185,12 +189,18 @@ export component AppPicker inherits Rectangle {
     TouchArea { scroll-event => { return accept; } }
     FocusScope { width: 100%; height: 100%;
         key-pressed(event) => { if event.text == Key.Escape { root.dismissed(); return accept; } return reject; }
-        Text { x: 16px; y: 16px; text: "选择应用 · 包含历史应用"; color: root.dark ? #e8effb : #27364f; font-size: 16px; font-weight: 600; }
+        Text { x: 16px; y: 16px; text: root.caption; color: root.dark ? #e8effb : #27364f; font-size: 16px; font-weight: 600; }
         search-field := LineEdit { x: 16px; y: 48px; width: parent.width - 32px; text <=> root.search; placeholder-text: "搜索应用名称或路径"; accepted => { if root.apps.length > 0 { root.chosen(root.apps[0].path); } } }
-        ListView { x: 16px; y: 94px; width: parent.width - 32px; height: 238px;
+        if root.filters.length > 0: HorizontalLayout { x: 16px; y: 88px; height: 32px; spacing: 8px;
+            for label[index] in root.filters: ActionButton { width: 88px; text: label; primary: root.filter_index == index; clicked => { root.filter-selected(index); } }
+        }
+        ListView { x: 16px; y: root.filters.length > 0 ? 130px : 94px; width: parent.width - 32px; height: root.filters.length > 0 ? 202px : 238px;
             for app in root.apps: Rectangle { height: 54px; background: touch.has-hover ? (root.dark ? #304465 : #e9f0ff) : transparent;
                 VerticalLayout { padding: 6px; spacing: 3px;
-                    Text { text: app.name; color: root.dark ? #e8effb : #27364f; font-size: 13px; overflow: elide; }
+                    HorizontalLayout { spacing: 8px;
+                        Text { horizontal-stretch: 1; min-width: 0px; text: app.name; color: root.dark ? #e8effb : #27364f; font-size: 13px; overflow: elide; }
+                        if app.note != "": Text { text: app.note; color: root.dark ? #aab9d0 : #5f708a; font-size: 12px; }
+                    }
                     Text { text: app.path; color: root.dark ? #aab9d0 : #5f708a; font-size: 11px; overflow: elide; }
                 }
                 touch := TouchArea { mouse-cursor: pointer; clicked => { root.chosen(app.path); } }

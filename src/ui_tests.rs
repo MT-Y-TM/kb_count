@@ -753,6 +753,218 @@ fn verify_export_ranges(ui: &MainWindow, window: &MinimalSoftwareWindow) {
     ui.set_page_scroll_y(0.0);
 }
 
+fn verify_policy_editor(ui: &MainWindow, window: &MinimalSoftwareWindow) {
+    use crate::storage::history::sample;
+    let mut db = storage::database::Database::open(std::path::Path::new(":memory:")).unwrap();
+    for (path, count) in [
+        ("C:/Browser/Chrome.exe", 11),
+        ("C:/Apps/Editor.exe", 7),
+        ("C:/Secure/KeePass.exe", 3),
+    ] {
+        db.record_batch(&[sample("2024-02-29", None, path, "key", count)])
+            .unwrap();
+    }
+    let db = Arc::new(Mutex::new(db));
+    ui.set_selected_page(0);
+    policy_editor::bind(ui, db.clone());
+    assert!(
+        !ui.get_policy_ready(),
+        "hidden startup does not load policy catalogs"
+    );
+    ui.set_detail_loaded(false);
+    ui.set_heatmap_scope(0);
+    ui.set_date_text("2024-02-29".into());
+    let trend_path = ui.get_trend_app_path();
+    let trend_name = ui.get_trend_app_name();
+    ui.show().unwrap();
+    let click = |x, y| {
+        let position = slint::LogicalPosition::new(x, y);
+        let button = slint::platform::PointerEventButton::Left;
+        ui.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerPressed { position, button });
+        ui.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerReleased { position, button });
+        render_frame(window);
+    };
+    for (label, scale, width, height) in [
+        ("100", 1.0, 1280, 720),
+        ("125", 1.25, 1280, 720),
+        ("150", 1.5, 1280, 720),
+        ("175", 1.75, 1680, 945),
+        ("200", 2.0, 1920, 1080),
+        ("minimum", 1.0, 820, 440),
+    ] {
+        window
+            .window()
+            .dispatch_event(slint::platform::WindowEvent::ScaleFactorChanged {
+                scale_factor: scale,
+            });
+        window.set_size(slint::PhysicalSize::new(width, height));
+        for dark in [false, true] {
+            db.lock()
+                .unwrap()
+                .set_policy("C:/Apps/Editor.exe", "excluded")
+                .unwrap();
+            ui.set_dark_mode(dark);
+            ui.set_selected_page(3);
+            ui.invoke_policy_editor_requested();
+            render_frame(window);
+            render_frame(window);
+            assert!(ui.get_policy_section_y() > 0.0);
+            ui.set_page_scroll_y(-ui.get_policy_section_y());
+            render_frame(window);
+            save_preview(
+                window,
+                &format!(
+                    "policy-ready-{label}-{}",
+                    if dark { "dark" } else { "light" }
+                ),
+            );
+            let padding = if ui.get_compact_layout() { 12.0 } else { 26.0 };
+            let gap = if ui.get_compact_layout() { 10.0 } else { 18.0 };
+            let top = padding + if ui.get_compact_layout() { 38.0 } else { 50.0 } + gap;
+            let logical_width = width as f32 / scale;
+            let logical_height = height as f32 / scale;
+            let content_x = if logical_width < 960.0 { 129.0 } else { 169.0 } + padding;
+            click(logical_width - padding - 74.0, top + 93.0);
+            assert!(ui.get_policy_picker_open(), "app selector opens at {label}");
+            let left = (logical_width - 600.0) / 2.0;
+            let upper = (logical_height - 392.0) / 2.0;
+            click(left + 156.0, upper + 104.0);
+            assert_eq!(ui.get_policy_filter(), 1);
+            assert_eq!(ui.get_policy_apps().row_count(), 1);
+            click(left + 252.0, upper + 104.0);
+            assert_eq!(
+                ui.get_policy_apps().row_count(),
+                2,
+                "excluded includes manual and default policies"
+            );
+            let theme = if dark { "dark" } else { "light" };
+            save_preview(window, &format!("policy-picker-{label}-{theme}"));
+            click(left + 60.0, upper + 104.0);
+            ui.set_policy_search("C:/BROWSER/CHROME".into());
+            render_frame(window);
+            assert_eq!(ui.get_policy_apps().row_count(), 1);
+            click(left + 220.0, upper + 157.0);
+            assert!(!ui.get_policy_picker_open());
+            assert_eq!(ui.get_policy_mode(), 1);
+            assert!(!ui.get_policy_manual());
+            assert_eq!(
+                db.lock().unwrap().policies().unwrap().len(),
+                1,
+                "choosing an application does not save a policy"
+            );
+            assert_eq!(ui.get_trend_app_path(), trend_path);
+            assert_eq!(ui.get_trend_app_name(), trend_name);
+            click(content_x + 68.0, top + 181.0);
+            assert_eq!(ui.get_policy_mode(), 0, "detailed mode button at {label}");
+            assert!(ui.get_policy_manual());
+            assert!(
+                ui.get_policy_feedback().contains("已保存"),
+                "deferred path handlers preserve save feedback"
+            );
+            save_preview(window, &format!("policy-editor-{label}-{theme}"));
+            click(content_x + 176.0, top + 181.0);
+            assert_eq!(ui.get_policy_mode(), 1);
+            click(content_x + 288.0, top + 181.0);
+            assert_eq!(ui.get_policy_mode(), 2);
+            click(logical_width - padding - 70.0, top + 181.0);
+            assert_eq!(
+                ui.get_policy_mode(),
+                1,
+                "reset restores browser totals-only default"
+            );
+            assert!(!ui.get_policy_manual());
+            assert!(ui.get_policy_feedback().contains("恢复默认"));
+            assert_eq!(db.lock().unwrap().totals("2024-02-29").unwrap().0, 21);
+            refresh_detail(
+                ui,
+                &db.lock().unwrap(),
+                "2024-02-29",
+                "C:/Browser/Chrome.exe",
+            )
+            .unwrap();
+            ui.set_selected_page(2);
+            render_frame(window);
+            ui.set_page_scroll_y(-10_000.0);
+            render_frame(window);
+            click(
+                logical_width - padding - 57.0,
+                logical_height - padding - gap - 79.0,
+            );
+            render_frame(window);
+            render_frame(window);
+            assert_eq!(
+                ui.get_selected_page(),
+                3,
+                "detail management reaches settings at {label}"
+            );
+            assert!(
+                ui.get_page_scroll_y() < 0.0,
+                "detail management reveals policy editor at {label}"
+            );
+            assert!(!ui.get_policy_reveal());
+            ui.set_detail_loaded(false);
+        }
+    }
+    let guard = db.lock().unwrap();
+    ui.set_policy_path("C:/Secure/KeePass.exe".into());
+    render_frame(window);
+    assert_eq!(
+        ui.get_policy_mode(),
+        2,
+        "typing reads cached policy without database access"
+    );
+    for draft in ["chrome.exe", "\"\""] {
+        ui.set_policy_path(draft.into());
+        render_frame(window);
+        assert!(!ui.get_policy_path_valid());
+        ui.invoke_policy_detailed_clicked();
+        assert!(ui.get_policy_feedback().contains("未保存"));
+    }
+    ui.set_policy_path("C:/Browser/Chrome.exe".into());
+    ui.invoke_policy_detailed_clicked();
+    render_frame(window);
+    assert!(ui.get_policy_feedback().contains("未保存"));
+    assert_eq!(ui.get_policy_mode(), 1);
+    assert!(
+        !guard
+            .policies()
+            .unwrap()
+            .contains_key(r"c:\browser\chrome.exe")
+    );
+    ui.invoke_policy_editor_requested();
+    assert!(!ui.get_policy_ready());
+    drop(guard);
+    ui.invoke_policy_editor_requested();
+    assert!(ui.get_policy_ready());
+    ui.invoke_policy_picker_requested();
+    render_frame(window);
+    ui.set_policy_search("EDITOR".into());
+    render_frame(window);
+    assert_eq!(ui.get_policy_apps().row_count(), 1);
+    ui.set_policy_search("no-matching-application".into());
+    render_frame(window);
+    assert_eq!(ui.get_policy_apps().row_count(), 0);
+    ui.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Escape.into(),
+        });
+    ui.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyReleased {
+            text: slint::platform::Key::Escape.into(),
+        });
+    render_frame(window);
+    assert!(!ui.get_policy_picker_open());
+    assert_eq!(ui.get_policy_path(), "C:/Browser/Chrome.exe");
+    ui.set_selected_page(0);
+    ui.set_policy_path("".into());
+    window
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::ScaleFactorChanged { scale_factor: 1.0 });
+    window.set_size(slint::PhysicalSize::new(1060, 780));
+}
+
 fn verify_query_dates(ui: &MainWindow, window: &MinimalSoftwareWindow) {
     use crate::storage::history::sample;
     let mut database = storage::database::Database::open(std::path::Path::new(":memory:")).unwrap();
@@ -1079,6 +1291,11 @@ fn verify_ui_state() {
     }
     date_picker::bind(&ui);
     export_dates::bind(&ui);
+    verify_policy_editor(&ui, &window);
+    if std::env::var_os("KB_COUNT_POLICY_ONLY").is_some() {
+        ui.hide().unwrap();
+        return;
+    }
     verify_query_dates(&ui, &window);
     if std::env::var_os("KB_COUNT_QUERY_ONLY").is_some() {
         ui.hide().unwrap();
@@ -1633,7 +1850,17 @@ fn verify_ui_state() {
                     );
                     assert_eq!(ui.get_selected_page(), 3, "policy action reaches settings");
                     assert_eq!(ui.get_policy_path(), ui.get_detail_path());
-                    assert_eq!(ui.get_page_scroll_y(), 0.0);
+                    render_frame(&window);
+                    render_frame(&window);
+                    assert!(
+                        ui.get_page_scroll_y() < 0.0,
+                        "policy action scrolls to its editor"
+                    );
+                    assert!(!ui.get_policy_reveal());
+                    // The management action already selected page 3. Leave
+                    // it before the next loop entry tests a fresh navigation.
+                    ui.set_selected_page(0);
+                    render_frame(&window);
                 }
             }
         }

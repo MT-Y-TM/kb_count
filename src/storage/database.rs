@@ -284,6 +284,14 @@ impl Database {
         Ok(())
     }
 
+    pub fn reset_policy(&self, path: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM app_policies WHERE app_id IN (SELECT id FROM applications WHERE executable_path=?1 COLLATE NOCASE)",
+            [normalize_app_path(path)],
+        )?;
+        Ok(())
+    }
+
     pub fn policies(&self) -> Result<HashMap<String, CaptureMode>> {
         let mut stmt = self.conn.prepare("SELECT a.executable_path,p.capture_mode FROM app_policies p JOIN applications a ON a.id=p.app_id")?;
         let rows = stmt.query_map([], |row| {
@@ -293,12 +301,6 @@ impl Database {
             ))
         })?;
         Ok(rows.collect::<rusqlite::Result<HashMap<_, _>>>()?)
-    }
-
-    pub fn policy_rows(&self) -> Result<Vec<(String, CaptureMode)>> {
-        let mut rows = self.policies()?.into_iter().collect::<Vec<_>>();
-        rows.sort_by(|left, right| left.0.cmp(&right.0));
-        Ok(rows)
     }
 
     pub fn app_detail(&self, date: &str, path: &str) -> Result<Option<AppDetail>> {
@@ -337,6 +339,36 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn resetting_policy_restores_defaults_without_deleting_history_or_app_identity() {
+        use crate::storage::history::sample;
+        let mut db = Database::open(Path::new(":memory:")).unwrap();
+        db.record_batch(&[sample(
+            "2024-02-29",
+            None,
+            "C:/Browser/Chrome.exe",
+            "key",
+            14,
+        )])
+        .unwrap();
+        db.set_policy("C:/Browser/Chrome.exe", "excluded").unwrap();
+        db.reset_policy("C:/BROWSER/CHROME.EXE").unwrap();
+        assert!(db.policies().unwrap().is_empty());
+        assert_eq!(
+            db.app_detail("2024-02-29", "C:/Browser/Chrome.exe")
+                .unwrap()
+                .unwrap()
+                .policy,
+            CaptureMode::TotalsOnly
+        );
+        assert_eq!(db.totals("2024-02-29").unwrap(), (14, 0, 0, 1));
+        assert_eq!(
+            db.input_ranking("2024-02-29", None, "keyboard").unwrap()[0].count,
+            14
+        );
+        db.reset_policy("C:/Missing/UnknownApp.exe").unwrap();
+        assert_eq!(db.history_apps().unwrap().len(), 1);
+    }
     use crate::stats::aggregator::Aggregator;
 
     #[test]

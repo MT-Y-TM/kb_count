@@ -436,6 +436,7 @@ pub fn bind(ui: &MainWindow, db: Arc<Mutex<Database>>) {
                             .map(|(name, path)| ChartApp {
                                 name: name.into(),
                                 path: path.into(),
+                                note: Default::default(),
                             })
                             .collect();
                         ui.set_chart_app_search("".into());
