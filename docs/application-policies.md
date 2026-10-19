@@ -37,3 +37,5 @@ Remove-Item Env:KB_COUNT_POLICY_ONLY, Env:KB_COUNT_RENDER_UI
 Windows 11 本机锁定依赖、离线执行 `cargo fmt --all -- --check`、`cargo check --locked --offline`、`cargo clippy --all-targets --locked --offline -- -D warnings` 均通过。清除全部专项和截图开关后，完整 `cargo test --locked --offline` 为 65 项通过、0 失败，192.77 秒。前一日包含详情实际跳转的策略专项 1 项通过，56.76 秒；后续修正了完整用例中把同一页面重复赋值误当作切页的假设，实际离开后再进入，仍验证正常导航从顶部开始。
 
 已查看最小窗口浅色编辑区、最小窗口深色排除筛选、150% 浅色筛选和 200% 深色编辑区的实际渲染。测试仅使用合成聚合数据和软件窗口，没有对运行中的个人采集器注入输入、重启或修改其数据。本轮新增的是策略编辑操作，时间记录继续保持按日期／小时聚合，不新增逐次时间戳。
+
+功能提交 `e94797e`，仅本地提交，未推送。`cargo build --release --locked --offline` 成功，耗时 5 分 37 秒；`target/release/kb_count.exe` 于 2026-10-19 23:17:01（+08:00）生成，17,715,712 字节，SHA-256 `1959E24544547B1C78ED62B37F0D50DC21F0F2308ACF1580CF381B86EB49FB1D`。`tools/verify_release.py` 确认 x64、GUI 子系统、12 种内嵌图标及版本资源。上一版保留为 `target/release/kb_count.before-policy-editor-20261019-231123.exe`，备份校验值与上轮交付一致。原 PID 27452（09:06:30 启动）在构建前后保持运行，没有自动重启采集器；从托盘正常退出后重新打开新 EXE 才会加载新界面。开发验证只使用测试库，不改变配置格式、Schema 或便携路径；新版 Release CPU／内存未重新测量。
