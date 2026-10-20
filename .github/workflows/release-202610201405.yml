@@ -1,0 +1,109 @@
+name: Publish 202610201405
+
+on:
+  push:
+    branches: [codex/release-202610201405]
+    paths:
+      - .github/workflows/release-202610201405.yml
+      - docs/releases/202610201405.md
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-202610201405
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: source
+    steps:
+      - name: Checkout release configuration
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: release-config
+          persist-credentials: false
+      - name: Checkout immutable release source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/tags/202610201405
+          path: source
+          persist-credentials: false
+      - name: Verify source and install matching Rust toolchain
+        run: |
+          if ((git rev-parse HEAD) -ne '3e7e2cfc7622e072eb29e66cce16ba53f2cde5b8') {
+            throw 'Release tag no longer matches the validated source.'
+          }
+          rustup toolchain install 1.90.0 --profile minimal --component rustfmt --component clippy
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustup override set 1.90.0
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Check, test and compile Windows x64 executable
+        env:
+          CARGO_BUILD_JOBS: '4'
+        run: |
+          $checks = @(
+            @('fmt', '--all', '--', '--check'),
+            @('check', '--locked'),
+            @('clippy', '--all-targets', '--locked', '--', '-D', 'warnings'),
+            @('test', '--locked'),
+            @('build', '--release', '--locked')
+          )
+          foreach ($check in $checks) {
+            & cargo @check
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          python tools/verify_release.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Prepare executable, checksum and release notes
+        run: |
+          New-Item -ItemType Directory -Path ../package | Out-Null
+          Copy-Item target/release/kb_count.exe ../package/kb_count.exe
+          $hash = (Get-FileHash ../package/kb_count.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content ../package/SHA256SUMS.txt "$hash  kb_count.exe" -Encoding utf8NoBOM
+          Copy-Item ../release-config/docs/releases/202610201405.md ../package/release-notes.md
+          "SHA256: $hash" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+      - name: Transfer only release package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: kb-count-202610201405
+          path: package/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download validated package
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: kb-count-202610201405
+          path: package
+      - name: Create draft, verify uploaded executable and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd package
+          sha256sum --check SHA256SUMS.txt
+          gh release create 202610201405 --verify-tag --draft \
+            --title 'kb_count 202610201405' --notes-file release-notes.md \
+            kb_count.exe SHA256SUMS.txt
+          mkdir verify
+          gh release download 202610201405 --pattern kb_count.exe --dir verify
+          cp SHA256SUMS.txt verify/
+          (cd verify && sha256sum --check SHA256SUMS.txt)
+          gh release edit 202610201405 --draft=false
+          gh release view 202610201405 --json url,tagName,isDraft,publishedAt,assets
